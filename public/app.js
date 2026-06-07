@@ -72,6 +72,39 @@ function downloadText(filename, text, type = 'application/json') {
   URL.revokeObjectURL(url);
 }
 
+function renderImportResults(results = []) {
+  document.querySelector('#importResults').innerHTML = results.length ? results.map((item) => `
+    <div class="list-item">
+      <strong>${escapeHtml(item.action === 'updated' ? '已更新' : '已新建')} · ${escapeHtml(item.name)}</strong>
+      <small>${escapeHtml(item.base_url)} · ID ${escapeHtml(item.id)}</small>
+    </div>
+  `).join('') : '<p class="empty">没有导入任何上游。</p>';
+}
+
+async function importConfigFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.json') && file.type !== 'application/json') {
+    throw new Error('请选择 JSON 配置文件。');
+  }
+  const text = await file.text();
+  if (!text.trim()) throw new Error('导入文件为空。');
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (err) {
+    throw new Error('导入文件不是有效的 JSON。');
+  }
+  if (!Array.isArray(payload?.sites)) {
+    throw new Error('导入文件格式不正确：需要包含 sites 数组。');
+  }
+  const result = await api('/api/import', { method: 'POST', body: JSON.stringify({ sites: payload.sites }) });
+  document.querySelector('#importPanel').hidden = false;
+  document.querySelector('#importSummary').textContent = `已导入 ${result.imported} 个上游：按 Base URL 自动更新或新建。`;
+  renderImportResults(result.results || []);
+  await refresh();
+  document.querySelector('#importPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function getFormPayload() {
   const form = document.querySelector('#upstreamForm');
   const payload = Object.fromEntries(new FormData(form).entries());
@@ -403,6 +436,28 @@ document.querySelector('#themeBtn').addEventListener('click', () => {
 document.querySelector('#exportBtn').addEventListener('click', async () => {
   const data = await api('/api/export');
   downloadText(`sub2api-upstreams-${Date.now()}.json`, JSON.stringify(data, null, 2));
+});
+
+document.querySelector('#importBtn').addEventListener('click', () => {
+  document.querySelector('#importFileInput').click();
+});
+
+document.querySelector('#importFileInput').addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  try {
+    await importConfigFile(file);
+  } catch (err) {
+    document.querySelector('#importPanel').hidden = false;
+    document.querySelector('#importSummary').textContent = `导入失败：${err.message}`;
+    document.querySelector('#importResults').innerHTML = '';
+    alert(err.message);
+  } finally {
+    event.target.value = '';
+  }
+});
+
+document.querySelector('#closeImportBtn').addEventListener('click', () => {
+  document.querySelector('#importPanel').hidden = true;
 });
 
 document.querySelector('#backupBtn').addEventListener('click', () => {

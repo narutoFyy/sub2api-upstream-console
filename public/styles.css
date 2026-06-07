@@ -193,6 +193,10 @@ button:disabled { cursor: wait; opacity: 0.65; transform: none; }
   padding: 22px;
 }
 
+.import-panel {
+  scroll-margin-top: 16px;
+}
+
 .panel-title {
   display: flex;
   justify-content: space-between;
