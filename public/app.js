@@ -99,7 +99,9 @@ function setForm(site = null, credentials = {}) {
   form.sync_interval_seconds.value = site?.sync_interval_seconds ?? 180;
   form.notes.value = site?.notes || '';
   document.querySelector('#formTitle').textContent = site ? `编辑上游：${site.name}` : '新增上游';
-  document.querySelector('#formMessage').textContent = site ? '正在编辑已有上游。密码或 Token 留空时会保留原凭证。' : '';
+  document.querySelector('#formMessage').textContent = site
+    ? '正在编辑已有上游。密码或 Token 留空时会保留原凭证。'
+    : '站点标签只是给你自己分类；倍率识别词用于自动判断哪些分组属于 Codex。';
 }
 
 function showMessage(text, tone = '') {

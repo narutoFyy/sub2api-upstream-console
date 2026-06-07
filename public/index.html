@@ -59,8 +59,8 @@
             <label>邮箱<input name="email" type="email" placeholder="you@example.com" /></label>
             <label>密码<input name="password" type="password" placeholder="新增或修改时填写" autocomplete="new-password" /></label>
             <label>Token<input name="token" type="password" placeholder="Token 模式可填写" autocomplete="new-password" /></label>
-            <label>标签<input name="tags" placeholder="codex,cheap,backup" /></label>
-            <label>Codex 别名<input name="codex_aliases" value="codex" placeholder="codex,chatgpt,codex-pro" /></label>
+            <label>站点标签（可选）<input name="tags" placeholder="例如：备用,低价,稳定" /></label>
+            <label>Codex 倍率识别词<input name="codex_aliases" value="codex" placeholder="分组名包含这些词就算 Codex，例如：codex,code" /></label>
             <label>低余额阈值<input name="low_balance_threshold" type="number" step="0.0001" value="10" /></label>
             <label>倍率变化阈值 %<input name="rate_change_threshold_percent" type="number" step="0.1" value="20" /></label>
             <label>同步频率秒<input name="sync_interval_seconds" type="number" min="30" value="180" /></label>
@@ -70,7 +70,7 @@
               <button class="secondary" type="submit">保存上游</button>
             </div>
           </form>
-          <p id="formMessage" class="notice"></p>
+          <p id="formMessage" class="notice">站点标签只是给你自己分类；Codex 倍率识别词用于自动判断哪些分组属于 Codex。</p>
         </section>
 
         <section class="panel">
