@@ -9,8 +9,10 @@ class UpstreamHTTPError extends Error {
   }
 }
 
-function joinUrl(baseUrl, path) {
-  return `${baseUrl.replace(/\/$/, '')}/api/v1${path.startsWith('/') ? path : `/${path}`}`;
+const API_PREFIXES = ['/api/v1', '/api'];
+
+function joinUrl(baseUrl, path, prefix = '/api/v1') {
+  return `${baseUrl.replace(/\/$/, '')}${prefix}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 function unwrapSub2API(payload) {
@@ -26,7 +28,7 @@ async function requestJson(baseUrl, path, options = {}) {
     ...(options.body ? { 'content-type': 'application/json' } : {}),
     ...(options.token ? { authorization: `Bearer ${options.token}` } : {})
   };
-  const res = await fetch(joinUrl(baseUrl, path), {
+  const res = await fetch(joinUrl(baseUrl, path, options.prefix || '/api/v1'), {
     method: options.method || 'GET',
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
@@ -49,18 +51,31 @@ async function requestJson(baseUrl, path, options = {}) {
 }
 
 async function loginWithPassword(baseUrl, email, password) {
-  const data = await requestJson(baseUrl, '/auth/login', {
-    method: 'POST',
-    body: { email, password }
-  });
-  const token = data?.access_token || data?.token || data?.jwt;
-  if (!token) {
-    throw new Error('Login succeeded but no access token was returned');
+  const attempts = [];
+  for (const prefix of API_PREFIXES) {
+    for (const path of ['/auth/login', '/login']) {
+      try {
+        const data = await requestJson(baseUrl, path, {
+          method: 'POST',
+          body: { email, password },
+          prefix
+        });
+        const token = data?.access_token || data?.token || data?.jwt;
+        if (!token) {
+          throw new Error('Login succeeded but no access token was returned');
+        }
+        return {
+          token,
+          prefix,
+          login_path: path,
+          raw: data
+        };
+      } catch (err) {
+        attempts.push(`${prefix}${path}: ${err.message}`);
+      }
+    }
   }
-  return {
-    token,
-    raw: data
-  };
+  throw new Error(`Login failed on known Sub2API paths: ${attempts.join('; ')}`);
 }
 
 function extractBalance(profile) {
@@ -169,33 +184,42 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
     login = await loginWithPassword(baseUrl, email, password);
     activeToken = login.token;
   }
+  const apiPrefix = login?.prefix || '/api/v1';
 
   const results = {};
   const errors = {};
 
-  async function optional(name, path) {
-    try {
-      results[name] = await requestJson(baseUrl, path, { token: activeToken });
-    } catch (err) {
-      errors[name] = {
-        message: err.message,
-        status: err.status || null
-      };
-      results[name] = null;
+  async function optional(name, paths) {
+    const pathList = Array.isArray(paths) ? paths : [paths];
+    const attempts = [];
+    for (const path of pathList) {
+      try {
+        results[name] = await requestJson(baseUrl, path, { token: activeToken, prefix: apiPrefix });
+        return;
+      } catch (err) {
+        attempts.push({
+          path,
+          message: err.message,
+          status: err.status || null
+        });
+      }
     }
+    errors[name] = attempts;
+    results[name] = null;
   }
 
-  await optional('profile', '/user/profile');
-  await optional('dashboardStats', '/usage/dashboard/stats');
-  await optional('todayStats', '/usage/stats?period=today');
-  await optional('groups', '/groups/available');
-  await optional('rates', '/groups/rates');
-  await optional('keys', '/keys');
-  await optional('channels', '/channels/available');
+  await optional('profile', ['/user/profile', '/profile', '/admin/user/profile']);
+  await optional('dashboardStats', ['/usage/dashboard/stats', '/admin/usage/dashboard/stats']);
+  await optional('todayStats', ['/usage/stats?period=today', '/admin/usage/stats?period=today']);
+  await optional('groups', ['/groups/available', '/admin/groups', '/groups']);
+  await optional('rates', ['/groups/rates', '/admin/groups/rates', '/rates']);
+  await optional('keys', ['/keys', '/admin/keys']);
+  await optional('channels', ['/channels/available', '/admin/channels', '/channels']);
 
   const profile = results.profile || {};
   const usage = extractUsage(results.dashboardStats || results.todayStats || {});
   const keyItems = Array.isArray(results.keys?.items) ? results.keys.items : Array.isArray(results.keys) ? results.keys : [];
+  const channelItems = Array.isArray(results.channels?.items) ? results.channels.items : Array.isArray(results.channels) ? results.channels : [];
   let rates = normalizeRates(results.rates);
   if (rates.length === 0) {
     rates = normalizeRates(results.groups);
@@ -229,7 +253,8 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
       min_rate: allRateValues.length ? Math.min(...allRateValues) : null,
       max_rate: allRateValues.length ? Math.max(...allRateValues) : null,
       group_count: rates.length,
-      key_count: keyItems.length
+      key_count: keyItems.length,
+      channel_count: channelItems.length
     },
     raw: results
   };

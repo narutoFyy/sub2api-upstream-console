@@ -23,10 +23,13 @@
           <div>
             <p class="eyebrow">Independent upstream observatory</p>
             <h1>Sub2API 上游聚合控制台</h1>
-            <p class="subtitle">集中查看上游余额、用量、分组倍率和同步状态。现在它已经从“能跑”开始往“好管”进化了。</p>
+            <p class="subtitle">集中查看上游余额、用量、分组倍率和同步状态。把分散的上游账号变成一张可行动的管理地图。</p>
           </div>
           <div class="hero-actions">
             <button id="syncAllBtn" class="primary">同步全部上游</button>
+            <button id="themeBtn" class="ghost">切换主题</button>
+            <button id="exportBtn" class="ghost">导出配置</button>
+            <button id="backupBtn" class="ghost">备份数据库</button>
             <button id="logoutBtn" class="ghost" hidden>退出</button>
           </div>
         </section>
@@ -111,6 +114,17 @@
               <tbody id="upstreamRows"></tbody>
             </table>
           </div>
+        </section>
+
+        <section id="detailPanel" class="panel" hidden>
+          <div class="panel-title">
+            <div>
+              <h2 id="detailTitle">上游详情</h2>
+              <p id="detailSubtitle">余额、用量、能力矩阵、趋势和最近同步记录。</p>
+            </div>
+            <button id="closeDetailBtn" class="ghost">关闭详情</button>
+          </div>
+          <div id="detailContent"></div>
         </section>
 
         <section class="panel">

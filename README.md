@@ -11,6 +11,10 @@
 
 需求文档见 [docs/PRD_CN.md](docs/PRD_CN.md)。
 
+部署说明见 [docs/DEPLOY_CN.md](docs/DEPLOY_CN.md)。
+
+备份说明见 [docs/BACKUP_CN.md](docs/BACKUP_CN.md)。
+
 ## 本地运行
 
 ```powershell
@@ -46,3 +50,7 @@ http://localhost:4317
 - 上游新增、编辑、删除和连接测试。
 - 搜索、状态筛选、排序和倍率筛选。
 - 可选控制台登录密码。
+- 上游详情页、能力矩阵、历史趋势。
+- 配置导出、SQLite 数据库备份。
+- Sub2API `/api/v1` 与 `/api` 路径兜底。
+- 深色/浅色主题切换。

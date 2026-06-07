@@ -3,6 +3,7 @@ const state = {
   logs: [],
   details: new Map(),
   authEnabled: false,
+  selectedDetailId: null,
   filters: {
     search: '',
     status: '',
@@ -61,6 +62,16 @@ async function api(path, options = {}) {
   return data;
 }
 
+function downloadText(filename, text, type = 'application/json') {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function getFormPayload() {
   const form = document.querySelector('#upstreamForm');
   const payload = Object.fromEntries(new FormData(form).entries());
@@ -78,7 +89,7 @@ function setForm(site = null, credentials = {}) {
   form.name.value = site?.name || 'Stone API';
   form.base_url.value = site?.base_url || 'https://www.shitoutk.com';
   form.auth_mode.value = site?.auth_mode || 'password';
-  form.email.value = credentials.email || '';
+  form.email.value = credentials.email && !credentials.email.includes('*') ? credentials.email : '';
   form.password.value = '';
   form.token.value = '';
   form.tags.value = (site?.tags || []).join(',');
@@ -177,6 +188,8 @@ function renderRows() {
           ${warnings.length ? `<small class="danger-text">${escapeHtml(warnings.join('；'))}</small>` : ''}
         </td>
         <td class="actions">
+          <button class="ghost" data-detail-id="${site.id}">详情</button>
+          <button class="ghost" data-copy-url="${escapeHtml(site.base_url)}">复制</button>
           <button class="ghost" data-sync-id="${site.id}">同步</button>
           <button class="ghost" data-edit-id="${site.id}">编辑</button>
           <button class="ghost danger" data-delete-id="${site.id}">删除</button>
@@ -239,6 +252,84 @@ function renderRates() {
   `).join('') : '<p class="empty">没有匹配的倍率。可以换个筛选条件，或先同步上游。</p>';
 }
 
+function trendSvg(history) {
+  const items = [...(history || [])].reverse().slice(-40);
+  if (items.length < 2) return '<p class="empty">趋势数据还不够，至少同步两次后会显示折线。</p>';
+  const width = 720;
+  const height = 180;
+  const fields = [
+    ['balance', '余额', '#0d6b5f'],
+    ['today_tokens', '今日 Token', '#dc7b2f']
+  ];
+  const lines = fields.map(([field, label, color]) => {
+    const values = items.map((item) => Number(item[field] || 0));
+    const max = Math.max(...values, 1);
+    const points = values.map((value, index) => {
+      const x = (index / Math.max(1, values.length - 1)) * width;
+      const y = height - (value / max) * (height - 24) - 12;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    return `<polyline fill="none" stroke="${color}" stroke-width="3" points="${points}" /><text x="8" y="${color === '#0d6b5f' ? 20 : 42}" fill="${color}" font-size="13">${label}</text>`;
+  }).join('');
+  return `<svg class="trend" viewBox="0 0 ${width} ${height}" role="img" aria-label="趋势图">${lines}</svg>`;
+}
+
+function renderCapabilities(capabilities = {}) {
+  const items = [
+    ['login', '登录'],
+    ['balance', '余额'],
+    ['usage', '用量'],
+    ['rates', '倍率'],
+    ['keys', 'Key'],
+    ['channels', '渠道']
+  ];
+  return items.map(([key, label]) => `
+    <span class="capability ${capabilities[key] ? 'ok' : 'missing'}">${label}：${capabilities[key] ? '支持' : '不可用'}</span>
+  `).join('');
+}
+
+function renderDetail(detail) {
+  const snapshot = detail.snapshot || {};
+  document.querySelector('#detailTitle').textContent = `上游详情：${detail.site.name}`;
+  document.querySelector('#detailSubtitle').textContent = `${detail.site.base_url} · ${timeText(detail.site.last_sync_at)}`;
+  document.querySelector('#detailContent').innerHTML = `
+    <div class="detail-grid">
+      <article class="metric"><span>余额</span><strong>${snapshot.balance ?? '不可用'}</strong></article>
+      <article class="metric"><span>总 Token</span><strong>${tokenText(snapshot.total_tokens)}</strong></article>
+      <article class="metric"><span>今日 Token</span><strong>${tokenText(snapshot.today_tokens)}</strong></article>
+      <article class="metric"><span>总成本</span><strong>${money.format(snapshot.total_cost || 0)}</strong></article>
+      <article class="metric"><span>Key 数量</span><strong>${snapshot.key_count || 0}</strong></article>
+      <article class="metric"><span>渠道数量</span><strong>${snapshot.channel_count || 0}</strong></article>
+      <article class="metric"><span>倍率范围</span><strong>${rateText(snapshot.min_rate)} - ${rateText(snapshot.max_rate)}</strong></article>
+    </div>
+    <h3>接口能力矩阵</h3>
+    <div class="capabilities">${renderCapabilities(detail.capabilities)}</div>
+    <h3>余额 / 用量趋势</h3>
+    ${trendSvg(detail.history || [])}
+    <h3>最近倍率</h3>
+    <div class="rate-grid compact">
+      ${(detail.rates || []).slice(0, 12).map((rate) => `
+        <article class="rate-pill">
+          <strong>${escapeHtml(rate.group_name || rate.group_id)}</strong>
+          <span>${rateText(rate.rate)}</span>
+          <small>${escapeHtml(rate.scope || 'unknown')} · ${timeText(rate.captured_at)}</small>
+        </article>
+      `).join('') || '<p class="empty">暂无倍率数据。</p>'}
+    </div>
+    <h3>最近同步记录</h3>
+    <div class="list">
+      ${(detail.logs || []).slice(0, 8).map((log) => `
+        <div class="list-item">
+          <strong>${escapeHtml(log.status)} · ${timeText(log.started_at)}</strong>
+          <small>${escapeHtml(log.summary || log.error_message || '无摘要')}</small>
+        </div>
+      `).join('') || '<p class="empty">暂无同步记录。</p>'}
+    </div>
+  `;
+  document.querySelector('#detailPanel').hidden = false;
+  document.querySelector('#detailPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 async function loadDetails(sites) {
   const details = await Promise.all((sites || []).map((site) => api(`/api/upstreams/${site.id}`).catch(() => null)));
   state.details.clear();
@@ -260,6 +351,9 @@ async function refresh() {
   renderRateChanges(dashboard.changes || []);
   renderLogs(state.logs.slice(0, 20));
   renderRates();
+  if (state.selectedDetailId && state.details.has(state.selectedDetailId)) {
+    renderDetail(state.details.get(state.selectedDetailId));
+  }
   document.querySelector('#lastUpdated').textContent = `最后刷新：${new Date().toLocaleString('zh-CN')}`;
 }
 
@@ -299,6 +393,20 @@ document.querySelector('#logoutBtn').addEventListener('click', async () => {
   await bootstrapAuth();
 });
 
+document.querySelector('#themeBtn').addEventListener('click', () => {
+  document.body.classList.toggle('dark');
+  localStorage.setItem('sub2api-theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+});
+
+document.querySelector('#exportBtn').addEventListener('click', async () => {
+  const data = await api('/api/export');
+  downloadText(`sub2api-upstreams-${Date.now()}.json`, JSON.stringify(data, null, 2));
+});
+
+document.querySelector('#backupBtn').addEventListener('click', () => {
+  window.location.href = '/api/backup/database';
+});
+
 document.querySelector('#upstreamForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const payload = getFormPayload();
@@ -327,7 +435,27 @@ document.querySelector('#resetFormBtn').addEventListener('click', () => {
   setForm();
 });
 
+document.querySelector('#closeDetailBtn').addEventListener('click', () => {
+  state.selectedDetailId = null;
+  document.querySelector('#detailPanel').hidden = true;
+});
+
 document.addEventListener('click', async (event) => {
+  const detailId = event.target?.dataset?.detailId;
+  if (detailId) {
+    state.selectedDetailId = Number(detailId);
+    const detail = state.details.get(Number(detailId)) || await api(`/api/upstreams/${detailId}`);
+    state.details.set(Number(detailId), detail);
+    renderDetail(detail);
+  }
+
+  const copyUrl = event.target?.dataset?.copyUrl;
+  if (copyUrl) {
+    await navigator.clipboard.writeText(copyUrl);
+    event.target.textContent = '已复制';
+    setTimeout(() => { event.target.textContent = '复制'; }, 1200);
+  }
+
   const syncId = event.target?.dataset?.syncId;
   if (syncId) {
     await withButton(event.target, '同步中...', async () => {
@@ -383,6 +511,10 @@ document.querySelector('#rateScopeFilter').addEventListener('change', (event) =>
   state.filters.rateScope = event.target.value;
   renderRates();
 });
+
+if (localStorage.getItem('sub2api-theme') === 'dark') {
+  document.body.classList.add('dark');
+}
 
 bootstrapAuth().catch((err) => {
   document.querySelector('#loginPanel').hidden = true;

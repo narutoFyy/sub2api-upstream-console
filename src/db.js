@@ -59,10 +59,34 @@ CREATE TABLE IF NOT EXISTS upstream_current_snapshots (
   max_rate REAL,
   group_count INTEGER NOT NULL DEFAULT 0,
   key_count INTEGER NOT NULL DEFAULT 0,
+  channel_count INTEGER NOT NULL DEFAULT 0,
   raw_payload TEXT NOT NULL DEFAULT '{}',
   captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS upstream_snapshot_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upstream_site_id INTEGER NOT NULL,
+  balance REAL,
+  balance_currency TEXT NOT NULL DEFAULT 'unknown',
+  total_requests INTEGER NOT NULL DEFAULT 0,
+  today_requests INTEGER NOT NULL DEFAULT 0,
+  total_tokens INTEGER NOT NULL DEFAULT 0,
+  today_tokens INTEGER NOT NULL DEFAULT 0,
+  total_cost REAL NOT NULL DEFAULT 0,
+  today_cost REAL NOT NULL DEFAULT 0,
+  codex_rate REAL,
+  min_rate REAL,
+  max_rate REAL,
+  group_count INTEGER NOT NULL DEFAULT 0,
+  key_count INTEGER NOT NULL DEFAULT 0,
+  channel_count INTEGER NOT NULL DEFAULT 0,
+  captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_upstream_snapshot_history_site_time ON upstream_snapshot_history(upstream_site_id, captured_at);
 
 CREATE TABLE IF NOT EXISTS group_rate_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,5 +141,7 @@ function ensureColumn(table, column, definition) {
 ensureColumn('upstream_sites', 'codex_aliases', `TEXT NOT NULL DEFAULT '["codex"]'`);
 ensureColumn('upstream_sites', 'low_balance_threshold', 'REAL NOT NULL DEFAULT 10');
 ensureColumn('upstream_sites', 'rate_change_threshold_percent', 'REAL NOT NULL DEFAULT 20');
+ensureColumn('upstream_current_snapshots', 'channel_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'channel_count', 'INTEGER NOT NULL DEFAULT 0');
 
 module.exports = db;

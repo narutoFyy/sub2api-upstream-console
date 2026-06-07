@@ -153,6 +153,40 @@ app.get('/api/dashboard', (req, res) => {
   res.json({ totals, sites, changes });
 });
 
+app.get('/api/export', (req, res) => {
+  res.json({
+    exported_at: new Date().toISOString(),
+    include_secrets: false,
+    sites: repo.exportSites({ includeSecrets: false })
+  });
+});
+
+app.post('/api/import', (req, res, next) => {
+  try {
+    const items = Array.isArray(req.body?.sites) ? req.body.sites : [];
+    const results = [];
+    for (const item of items) {
+      const credentials = item.credentials || {};
+      const payload = siteSchema.parse(sanitizeSitePayload({
+        ...item,
+        email: credentials.email || item.email || '',
+        password: credentials.password || item.password || '',
+        token: credentials.token || item.token || ''
+      }));
+      const existing = repo.listSites().find((site) => site.base_url === payload.base_url);
+      const site = existing ? repo.updateSite(existing.id, payload) : repo.createSite(payload);
+      results.push({ id: site.id, name: site.name, base_url: site.base_url, action: existing ? 'updated' : 'created' });
+    }
+    res.json({ imported: results.length, results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/backup/database', (req, res) => {
+  res.download(config.databasePath, `sub2api-upstream-console-${Date.now()}.sqlite`);
+});
+
 app.get('/api/upstreams', (req, res) => {
   res.json({ items: repo.listSites() });
 });
@@ -197,8 +231,16 @@ app.get('/api/upstreams/:id', (req, res) => {
     credentials: safeCredentials(repo.getMaskedCredentials(id)),
     snapshot: withoutRawPayload(repo.getSnapshot(id)),
     rates: repo.listRates(id, 300).map(withoutRawPayload),
-    logs: repo.listSyncLogs(id, 100)
+    logs: repo.listSyncLogs(id, 100),
+    history: repo.listSnapshotHistory(id, 120).map(withoutRawPayload),
+    capabilities: repo.capabilityMatrix(id)
   });
+});
+
+app.get('/api/upstreams/:id/trends', (req, res) => {
+  const id = Number(req.params.id);
+  if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
+  res.json({ items: repo.listSnapshotHistory(id, 240).reverse().map(withoutRawPayload) });
 });
 
 app.put('/api/upstreams/:id', (req, res, next) => {
