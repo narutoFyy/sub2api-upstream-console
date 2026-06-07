@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sub2API Upstream Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="loginPanel" class="panel login-panel" hidden>
+        <p class="eyebrow">Private console</p>
+        <h1>登录控制台</h1>
+        <p class="subtitle">输入本地配置的管理密码后再查看上游账号、余额和倍率。</p>
+        <form id="loginForm" class="login-form">
+          <input name="password" type="password" placeholder="控制台密码" autocomplete="current-password" required />
+          <button class="primary" type="submit">进入控制台</button>
+        </form>
+      </section>
+
+      <div id="consoleShell" hidden>
+        <section class="hero">
+          <div>
+            <p class="eyebrow">Independent upstream observatory</p>
+            <h1>Sub2API 上游聚合控制台</h1>
+            <p class="subtitle">集中查看上游余额、用量、分组倍率和同步状态。现在它已经从“能跑”开始往“好管”进化了。</p>
+          </div>
+          <div class="hero-actions">
+            <button id="syncAllBtn" class="primary">同步全部上游</button>
+            <button id="logoutBtn" class="ghost" hidden>退出</button>
+          </div>
+        </section>
+
+        <section class="cards" id="summaryCards"></section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <div>
+              <h2 id="formTitle">新增上游</h2>
+              <p>凭证会加密保存，前端不会回显完整密码。可以先测试连接，再保存。</p>
+            </div>
+            <button id="resetFormBtn" class="ghost" type="button">清空表单</button>
+          </div>
+          <form id="upstreamForm" class="grid-form">
+            <input name="id" type="hidden" />
+            <label>名称<input name="name" value="Stone API" required /></label>
+            <label>Base URL<input name="base_url" value="https://www.shitoutk.com" required /></label>
+            <label>认证模式
+              <select name="auth_mode">
+                <option value="password">账号密码</option>
+                <option value="token">Token</option>
+                <option value="api_key">API Key</option>
+                <option value="admin">管理员 Token</option>
+              </select>
+            </label>
+            <label>邮箱<input name="email" type="email" placeholder="you@example.com" /></label>
+            <label>密码<input name="password" type="password" placeholder="新增或修改时填写" autocomplete="new-password" /></label>
+            <label>Token<input name="token" type="password" placeholder="Token 模式可填写" autocomplete="new-password" /></label>
+            <label>标签<input name="tags" placeholder="codex,cheap,backup" /></label>
+            <label>Codex 别名<input name="codex_aliases" value="codex" placeholder="codex,chatgpt,codex-pro" /></label>
+            <label>低余额阈值<input name="low_balance_threshold" type="number" step="0.0001" value="10" /></label>
+            <label>倍率变化阈值 %<input name="rate_change_threshold_percent" type="number" step="0.1" value="20" /></label>
+            <label>同步频率秒<input name="sync_interval_seconds" type="number" min="30" value="180" /></label>
+            <label>备注<input name="notes" placeholder="例如：Codex 倍率低，备用线路" /></label>
+            <div class="form-actions">
+              <button id="testConnectionBtn" class="ghost" type="button">测试连接</button>
+              <button class="secondary" type="submit">保存上游</button>
+            </div>
+          </form>
+          <p id="formMessage" class="notice"></p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <div>
+              <h2>上游列表</h2>
+              <p id="lastUpdated">等待加载...</p>
+            </div>
+            <div class="toolbar">
+              <input id="searchInput" placeholder="搜索名称、网址、标签" />
+              <select id="statusFilter">
+                <option value="">全部状态</option>
+                <option value="active">正常</option>
+                <option value="sync_failed">同步失败</option>
+                <option value="disabled">已停用</option>
+              </select>
+              <select id="sortSelect">
+                <option value="id_desc">最新添加</option>
+                <option value="balance_asc">余额从低到高</option>
+                <option value="tokens_desc">今日 Token 从高到低</option>
+                <option value="sync_desc">最近同步</option>
+                <option value="rate_asc">最低倍率从低到高</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>上游</th>
+                  <th>状态</th>
+                  <th>余额</th>
+                  <th>今日 Token</th>
+                  <th>今日成本</th>
+                  <th>Codex 倍率</th>
+                  <th>倍率范围</th>
+                  <th>同步</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="upstreamRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <div>
+              <h2>当前分组倍率</h2>
+              <p>优先展示每个上游最新一次同步到的分组倍率。可筛选 Codex、Claude、GPT、OpenAI、Anthropic。</p>
+            </div>
+            <div class="toolbar">
+              <input id="rateSearchInput" placeholder="搜索倍率分组" />
+              <select id="rateScopeFilter">
+                <option value="">全部倍率</option>
+                <option value="codex">Codex 别名</option>
+                <option value="claude">Claude</option>
+                <option value="gpt">GPT</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+              </select>
+            </div>
+          </div>
+          <div id="rateGrid" class="rate-grid"></div>
+        </section>
+
+        <section class="split">
+          <div class="panel">
+            <h2>倍率变化</h2>
+            <div id="rateChanges" class="list"></div>
+          </div>
+          <div class="panel">
+            <h2>同步日志</h2>
+            <div id="syncLogs" class="list"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
