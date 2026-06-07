@@ -54,6 +54,12 @@ CREATE TABLE IF NOT EXISTS upstream_current_snapshots (
   today_tokens INTEGER NOT NULL DEFAULT 0,
   total_cost REAL NOT NULL DEFAULT 0,
   today_cost REAL NOT NULL DEFAULT 0,
+  week_requests INTEGER NOT NULL DEFAULT 0,
+  week_tokens INTEGER NOT NULL DEFAULT 0,
+  week_cost REAL NOT NULL DEFAULT 0,
+  month_requests INTEGER NOT NULL DEFAULT 0,
+  month_tokens INTEGER NOT NULL DEFAULT 0,
+  month_cost REAL NOT NULL DEFAULT 0,
   codex_rate REAL,
   min_rate REAL,
   max_rate REAL,
@@ -76,6 +82,12 @@ CREATE TABLE IF NOT EXISTS upstream_snapshot_history (
   today_tokens INTEGER NOT NULL DEFAULT 0,
   total_cost REAL NOT NULL DEFAULT 0,
   today_cost REAL NOT NULL DEFAULT 0,
+  week_requests INTEGER NOT NULL DEFAULT 0,
+  week_tokens INTEGER NOT NULL DEFAULT 0,
+  week_cost REAL NOT NULL DEFAULT 0,
+  month_requests INTEGER NOT NULL DEFAULT 0,
+  month_tokens INTEGER NOT NULL DEFAULT 0,
+  month_cost REAL NOT NULL DEFAULT 0,
   codex_rate REAL,
   min_rate REAL,
   max_rate REAL,
@@ -141,7 +153,19 @@ function ensureColumn(table, column, definition) {
 ensureColumn('upstream_sites', 'codex_aliases', `TEXT NOT NULL DEFAULT '["codex"]'`);
 ensureColumn('upstream_sites', 'low_balance_threshold', 'REAL NOT NULL DEFAULT 10');
 ensureColumn('upstream_sites', 'rate_change_threshold_percent', 'REAL NOT NULL DEFAULT 20');
+ensureColumn('upstream_current_snapshots', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'week_tokens', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'week_cost', 'REAL NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'month_requests', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'month_tokens', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'month_cost', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'channel_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'week_tokens', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'week_cost', 'REAL NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'month_requests', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'month_tokens', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'month_cost', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'channel_count', 'INTEGER NOT NULL DEFAULT 0');
 
 module.exports = db;

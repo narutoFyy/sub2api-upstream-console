@@ -6,6 +6,7 @@ const state = {
   selectedDetailId: null,
   filters: {
     search: '',
+    tag: '',
     status: '',
     sort: 'id_desc',
     rateSearch: '',
@@ -151,7 +152,7 @@ function renderCards(totals) {
     ['今日 Token', tokenText(totals.today_tokens)],
     ['今日成本', money.format(totals.today_cost)],
     ['余额不足', totals.low_balance],
-    ['倍率提醒', state.dashboard?.changes?.length || 0],
+    ['倍率提醒', totals.unacknowledged_changes ?? state.dashboard?.changes?.length ?? 0],
     ['后台同步', '已开启']
   ];
   document.querySelector('#summaryCards').innerHTML = cards.map(([label, value], index) => `
@@ -178,16 +179,41 @@ function siteWarnings(site) {
   if (Number.isFinite(balance) && balance > 0 && balance < threshold) warnings.push(`余额低于 ${threshold}`);
   if (site.last_sync_error) warnings.push(site.last_sync_error);
   if (!site.last_sync_at) warnings.push('尚未同步');
+  if (isStaleSite(site)) warnings.push('长期未同步');
   return warnings;
+}
+
+function isLowBalanceSite(site) {
+  const balance = Number(site.balance);
+  const threshold = Number(site.low_balance_threshold || 10);
+  return Number.isFinite(balance) && balance < threshold;
+}
+
+function isStaleSite(site) {
+  if (!site.last_sync_at) return false;
+  const intervalSeconds = Number(site.sync_interval_seconds || 180);
+  const staleAfterMs = Math.max(intervalSeconds * 3, 3600) * 1000;
+  return Date.now() - new Date(site.last_sync_at).getTime() > staleAfterMs;
+}
+
+function siteHasRateChange(site) {
+  return Boolean(site.has_unacknowledged_rate_change)
+    || (state.dashboard?.changes || []).some((item) => Number(item.upstream_site_id) === Number(site.id) && !item.acknowledged_at);
 }
 
 function filteredSites() {
   const sites = [...(state.dashboard?.sites || [])];
   const keyword = state.filters.search.toLowerCase();
+  const tagKeyword = state.filters.tag.toLowerCase();
   const filtered = sites.filter((site) => {
     const text = `${site.name} ${site.base_url} ${(site.tags || []).join(' ')}`.toLowerCase();
     if (keyword && !text.includes(keyword)) return false;
-    if (state.filters.status && site.status !== state.filters.status) return false;
+    const tagText = (site.tags || []).join(' ').toLowerCase();
+    if (tagKeyword && !tagText.includes(tagKeyword)) return false;
+    if (state.filters.status === 'low_balance' && !isLowBalanceSite(site)) return false;
+    if (state.filters.status === 'stale' && !isStaleSite(site)) return false;
+    if (state.filters.status === 'rate_changed' && !siteHasRateChange(site)) return false;
+    if (state.filters.status && !['low_balance', 'stale', 'rate_changed'].includes(state.filters.status) && site.status !== state.filters.status) return false;
     return true;
   });
   filtered.sort((a, b) => {
@@ -211,7 +237,7 @@ function renderRows() {
           <small>${escapeHtml((site.tags || []).join(' · '))}</small>
         </td>
         <td><span class="status ${escapeHtml(site.status)}">${escapeHtml(statusText(site.status))}</span></td>
-        <td class="${warnings.some((item) => item.startsWith('余额')) ? 'danger-text' : ''}">
+        <td class="${isLowBalanceSite(site) ? 'danger-text' : ''}">
           ${site.balance ?? '不可用'} <small>${escapeHtml(site.balance_currency || '')}</small>
         </td>
         <td>${tokenText(site.today_tokens)}</td>
@@ -227,6 +253,7 @@ function renderRows() {
           <button class="ghost" data-copy-url="${escapeHtml(site.base_url)}">复制</button>
           <button class="ghost" data-sync-id="${site.id}">同步</button>
           <button class="ghost" data-edit-id="${site.id}">编辑</button>
+          <button class="ghost" data-status-id="${site.id}" data-next-status="${site.status === 'disabled' ? 'active' : 'disabled'}">${site.status === 'disabled' ? '启用' : '停用'}</button>
           <button class="ghost danger" data-delete-id="${site.id}">删除</button>
         </td>
       </tr>
@@ -239,9 +266,10 @@ function renderRateChanges(changes) {
   document.querySelector('#rateChanges').innerHTML = changes.length ? changes.map((item) => {
     const percent = item.change_percent === null || item.change_percent === undefined ? '' : ` · ${money.format(item.change_percent)}%`;
     return `
-      <div class="list-item">
-        <strong>${escapeHtml(item.upstream_name)} · ${escapeHtml(item.group_name || item.group_id)}</strong>
-        <small>${rateText(item.old_rate)} -> ${rateText(item.new_rate)}${percent} · ${timeText(item.detected_at)}</small>
+        <div class="list-item">
+          <strong>${escapeHtml(item.upstream_name)} · ${escapeHtml(item.group_name || item.group_id)}</strong>
+        <small>${rateText(item.old_rate)} -> ${rateText(item.new_rate)}${percent} · ${timeText(item.detected_at)}${item.acknowledged_at ? ` · 已确认 ${timeText(item.acknowledged_at)}` : ''}</small>
+        ${item.acknowledged_at ? '' : `<button class="ghost" data-ack-rate-change="${item.id}">确认</button>`}
       </div>
     `;
   }).join('') : '<p class="empty">暂时没有倍率变化。首次同步会建立基线。</p>';
@@ -332,7 +360,11 @@ function renderDetail(detail) {
       <article class="metric"><span>余额</span><strong>${snapshot.balance ?? '不可用'}</strong></article>
       <article class="metric"><span>总 Token</span><strong>${tokenText(snapshot.total_tokens)}</strong></article>
       <article class="metric"><span>今日 Token</span><strong>${tokenText(snapshot.today_tokens)}</strong></article>
+      <article class="metric"><span>近 7 天 Token</span><strong>${tokenText(snapshot.week_tokens)}</strong></article>
+      <article class="metric"><span>近 30 天 Token</span><strong>${tokenText(snapshot.month_tokens)}</strong></article>
       <article class="metric"><span>总成本</span><strong>${money.format(snapshot.total_cost || 0)}</strong></article>
+      <article class="metric"><span>近 7 天成本</span><strong>${money.format(snapshot.week_cost || 0)}</strong></article>
+      <article class="metric"><span>近 30 天成本</span><strong>${money.format(snapshot.month_cost || 0)}</strong></article>
       <article class="metric"><span>Key 数量</span><strong>${snapshot.key_count || 0}</strong></article>
       <article class="metric"><span>渠道数量</span><strong>${snapshot.channel_count || 0}</strong></article>
       <article class="metric"><span>倍率范围</span><strong>${rateText(snapshot.min_rate)} - ${rateText(snapshot.max_rate)}</strong></article>
@@ -535,6 +567,19 @@ document.addEventListener('click', async (event) => {
     await api(`/api/upstreams/${deleteId}`, { method: 'DELETE' });
     await refresh();
   }
+
+  const statusId = event.target?.dataset?.statusId;
+  if (statusId) {
+    const nextStatus = event.target.dataset.nextStatus;
+    await api(`/api/upstreams/${statusId}/status`, { method: 'POST', body: JSON.stringify({ status: nextStatus }) });
+    await refresh();
+  }
+
+  const ackRateChangeId = event.target?.dataset?.ackRateChange;
+  if (ackRateChangeId) {
+    await api(`/api/rate-changes/${ackRateChangeId}/ack`, { method: 'POST' });
+    await refresh();
+  }
 });
 
 document.querySelector('#syncAllBtn').addEventListener('click', async (event) => {
@@ -546,6 +591,11 @@ document.querySelector('#syncAllBtn').addEventListener('click', async (event) =>
 
 document.querySelector('#searchInput').addEventListener('input', (event) => {
   state.filters.search = event.target.value;
+  renderRows();
+});
+
+document.querySelector('#tagFilterInput').addEventListener('input', (event) => {
+  state.filters.tag = event.target.value;
   renderRows();
 });
 

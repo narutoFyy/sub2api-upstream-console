@@ -94,10 +94,15 @@
             </div>
             <div class="toolbar">
               <input id="searchInput" placeholder="搜索名称、网址、标签" />
+              <input id="tagFilterInput" placeholder="标签筛选" />
               <select id="statusFilter">
                 <option value="">全部状态</option>
                 <option value="active">正常</option>
+                <option value="login_failed">登录失败</option>
                 <option value="sync_failed">同步失败</option>
+                <option value="low_balance">余额不足</option>
+                <option value="stale">长期未同步</option>
+                <option value="rate_changed">倍率变化</option>
                 <option value="disabled">已停用</option>
               </select>
               <select id="sortSelect">

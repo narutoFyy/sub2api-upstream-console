@@ -139,18 +139,24 @@ app.post('/api/logout', (req, res) => {
 app.use('/api', requireAuth);
 
 app.get('/api/dashboard', (req, res) => {
-  const sites = repo.listSites();
+  const allUnacknowledgedChanges = repo.listRateChanges(1000).filter((item) => !item.acknowledged_at);
+  const changedSiteIds = new Set(allUnacknowledgedChanges.map((item) => Number(item.upstream_site_id)));
+  const sites = repo.listSites().map((site) => ({
+    ...site,
+    has_unacknowledged_rate_change: changedSiteIds.has(Number(site.id))
+  }));
   const changes = repo.listRateChanges(20);
+  const unacknowledgedChanges = repo.countUnacknowledgedRateChanges();
   const totals = sites.reduce((acc, site) => {
     acc.today_tokens += Number(site.today_tokens || 0);
     acc.today_cost += Number(site.today_cost || 0);
     if (site.status === 'active') acc.active += 1;
     if (site.status === 'sync_failed' || site.status === 'login_failed') acc.failed += 1;
-    if (Number(site.balance) > 0 && Number(site.balance) < Number(site.low_balance_threshold || 10)) acc.low_balance += 1;
+    if (Number.isFinite(Number(site.balance)) && Number(site.balance) < Number(site.low_balance_threshold || 10)) acc.low_balance += 1;
     if (site.last_sync_at) acc.synced += 1;
     return acc;
   }, { upstreams: sites.length, active: 0, failed: 0, low_balance: 0, synced: 0, today_tokens: 0, today_cost: 0 });
-  res.json({ totals, sites, changes });
+  res.json({ totals: { ...totals, unacknowledged_changes: unacknowledgedChanges }, sites, changes });
 });
 
 app.get('/api/export', (req, res) => {
@@ -262,6 +268,18 @@ app.delete('/api/upstreams/:id', (req, res) => {
   res.json({ deleted: repo.deleteSite(Number(req.params.id)) });
 });
 
+app.post('/api/upstreams/:id/status', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const status = z.enum(['active', 'disabled']).parse(req.body?.status);
+    const site = repo.updateSite(id, { status });
+    if (!site) return res.status(404).json({ error: 'Not found' });
+    res.json(site);
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.post('/api/upstreams/:id/sync', async (req, res, next) => {
   try {
     const result = await syncSite(Number(req.params.id));
@@ -286,6 +304,10 @@ app.post('/api/sync-all', async (req, res, next) => {
 
 app.get('/api/rate-changes', (req, res) => {
   res.json({ items: repo.listRateChanges(200) });
+});
+
+app.post('/api/rate-changes/:id/ack', (req, res) => {
+  res.json({ acknowledged: repo.acknowledgeRateChange(Number(req.params.id)) });
 });
 
 app.get('/api/sync-logs', (req, res) => {

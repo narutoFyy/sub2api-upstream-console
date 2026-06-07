@@ -338,6 +338,7 @@ td {
 
 .status.active { color: var(--accent); background: rgba(13, 107, 95, 0.1); }
 .status.sync_failed { color: var(--danger); background: rgba(183, 53, 53, 0.1); }
+.status.login_failed { color: var(--danger); background: rgba(183, 53, 53, 0.1); }
 .status.disabled { color: var(--muted); background: rgba(117, 107, 93, 0.12); }
 
 .url {

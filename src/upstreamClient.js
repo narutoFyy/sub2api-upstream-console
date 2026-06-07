@@ -1,4 +1,5 @@
-const { pickFirstNumber, toNumber } = require('./utils');
+const dns = require('node:dns/promises');
+const { assertSafeUpstreamUrl, isPrivateHostname, pickFirstNumber, toNumber } = require('./utils');
 
 class UpstreamHTTPError extends Error {
   constructor(message, status, body) {
@@ -23,6 +24,11 @@ function unwrapSub2API(payload) {
 }
 
 async function requestJson(baseUrl, path, options = {}) {
+  const upstreamUrl = assertSafeUpstreamUrl(baseUrl);
+  const addresses = await dns.lookup(upstreamUrl.hostname, { all: true }).catch(() => []);
+  if (addresses.some((item) => isPrivateHostname(item.address))) {
+    throw new Error('Base URL resolved to a private network address');
+  }
   const headers = {
     accept: 'application/json',
     ...(options.body ? { 'content-type': 'application/json' } : {}),
@@ -99,6 +105,23 @@ function extractUsage(stats) {
     total_cost: toNumber(stats?.total_actual_cost ?? stats?.total_cost),
     today_cost: toNumber(stats?.today_actual_cost ?? stats?.today_cost),
     by_platform: Array.isArray(stats?.by_platform) ? stats.by_platform : []
+  };
+}
+
+function extractPeriodUsage(stats) {
+  if (!stats || typeof stats !== 'object') {
+    return { requests: 0, tokens: 0, cost: 0 };
+  }
+  const tokens = pickFirstNumber(
+    stats?.tokens,
+    stats?.total_tokens,
+    toNumber(stats?.input_tokens) + toNumber(stats?.output_tokens) + toNumber(stats?.cache_creation_tokens) + toNumber(stats?.cache_read_tokens),
+    toNumber(stats?.total_input_tokens) + toNumber(stats?.total_output_tokens) + toNumber(stats?.total_cache_creation_tokens) + toNumber(stats?.total_cache_read_tokens)
+  );
+  return {
+    requests: toNumber(stats?.requests ?? stats?.total_requests),
+    tokens: tokens || 0,
+    cost: toNumber(stats?.actual_cost ?? stats?.cost ?? stats?.total_actual_cost ?? stats?.total_cost)
   };
 }
 
@@ -211,6 +234,8 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
   await optional('profile', ['/user/profile', '/profile', '/admin/user/profile']);
   await optional('dashboardStats', ['/usage/dashboard/stats', '/admin/usage/dashboard/stats']);
   await optional('todayStats', ['/usage/stats?period=today', '/admin/usage/stats?period=today']);
+  await optional('weekStats', ['/usage/stats?period=week', '/admin/usage/stats?period=week']);
+  await optional('monthStats', ['/usage/stats?period=month', '/admin/usage/stats?period=month']);
   await optional('groups', ['/groups/available', '/admin/groups', '/groups']);
   await optional('rates', ['/groups/rates', '/admin/groups/rates', '/rates']);
   await optional('keys', ['/keys', '/admin/keys']);
@@ -218,6 +243,8 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
 
   const profile = results.profile || {};
   const usage = extractUsage(results.dashboardStats || results.todayStats || {});
+  const weekUsage = extractPeriodUsage(results.weekStats);
+  const monthUsage = extractPeriodUsage(results.monthStats);
   const keyItems = Array.isArray(results.keys?.items) ? results.keys.items : Array.isArray(results.keys) ? results.keys : [];
   const channelItems = Array.isArray(results.channels?.items) ? results.channels.items : Array.isArray(results.channels) ? results.channels : [];
   let rates = normalizeRates(results.rates);
@@ -249,6 +276,12 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
       email: profile?.email || '',
       role: profile?.role || '',
       ...usage,
+      week_requests: weekUsage.requests,
+      week_tokens: weekUsage.tokens,
+      week_cost: weekUsage.cost,
+      month_requests: monthUsage.requests,
+      month_tokens: monthUsage.tokens,
+      month_cost: monthUsage.cost,
       codex_rate: codexRate,
       min_rate: allRateValues.length ? Math.min(...allRateValues) : null,
       max_rate: allRateValues.length ? Math.max(...allRateValues) : null,
