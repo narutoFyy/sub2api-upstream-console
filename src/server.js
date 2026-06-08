@@ -136,7 +136,8 @@ const rechargeOrderSchema = z.object({
   order_type: z.enum(['balance', 'subscription']).default('balance'),
   plan_id: z.number().int().positive().optional(),
   return_url: z.string().url().optional(),
-  is_mobile: z.boolean().optional().default(false)
+  is_mobile: z.boolean().optional().default(false),
+  payment_source: z.string().min(1).optional().default('hosted_redirect')
 });
 
 app.get('/api/health', (req, res) => {
@@ -379,7 +380,8 @@ app.post('/api/upstreams/:id/recharge-orders', async (req, res, next) => {
       orderType: payload.order_type,
       planId: payload.plan_id,
       returnUrl: payload.return_url,
-      isMobile: payload.is_mobile
+      isMobile: payload.is_mobile,
+      paymentSource: payload.payment_source
     });
     const saved = repo.saveRechargeOrder(siteId, order);
     res.status(201).json({ order: withoutRawPayload(saved) });

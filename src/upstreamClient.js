@@ -23,6 +23,23 @@ function unwrapSub2API(payload) {
   return payload;
 }
 
+function upstreamErrorMessage(path, status, payload) {
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const message = body.message || body.error || body.reason || body.raw || '';
+  const code = body.code || body.error_code || body.reason || '';
+  const metadata = body.metadata && typeof body.metadata === 'object'
+    ? Object.entries(body.metadata).map(([key, value]) => `${key}=${value}`).join(', ')
+    : '';
+  const detail = [code, message, metadata].filter(Boolean).join(' · ');
+  return detail
+    ? `上游 ${path} 返回 ${status}：${detail}`
+    : `上游 ${path} 返回 ${status}`;
+}
+
+function defaultPaymentReturnUrl(baseUrl) {
+  return `${baseUrl.replace(/\/$/, '')}/payment/result`;
+}
+
 async function requestJson(baseUrl, path, options = {}) {
   const upstreamUrl = assertSafeUpstreamUrl(baseUrl);
   const addresses = await dns.lookup(upstreamUrl.hostname, { all: true }).catch(() => []);
@@ -48,10 +65,10 @@ async function requestJson(baseUrl, path, options = {}) {
     payload = { raw: text };
   }
   if (!res.ok) {
-    throw new UpstreamHTTPError(`Upstream ${path} returned ${res.status}`, res.status, payload);
+    throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
   }
   if (payload && typeof payload === 'object' && payload.code && payload.code !== 0) {
-    throw new UpstreamHTTPError(payload.message || `Upstream ${path} returned code ${payload.code}`, res.status, payload);
+    throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
   }
   return unwrapSub2API(payload);
 }
@@ -388,15 +405,16 @@ function normalizePaymentOrder(payload) {
   };
 }
 
-async function createPaymentOrder({ baseUrl, email, password, token, amount, paymentType, orderType = 'balance', planId, returnUrl, isMobile = false }) {
+async function createPaymentOrder({ baseUrl, email, password, token, amount, paymentType, orderType = 'balance', planId, returnUrl, isMobile = false, paymentSource = 'hosted_redirect' }) {
   const auth = await getUpstreamToken({ baseUrl, email, password, token });
   const body = {
     amount,
     payment_type: paymentType,
     order_type: orderType,
     is_mobile: isMobile,
+    payment_source: paymentSource,
     ...(planId ? { plan_id: planId } : {}),
-    ...(returnUrl ? { return_url: returnUrl } : {})
+    return_url: returnUrl || defaultPaymentReturnUrl(baseUrl)
   };
   const data = await requestJson(baseUrl, '/payment/orders', {
     method: 'POST',

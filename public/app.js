@@ -105,7 +105,10 @@ async function api(path, options = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || `Request failed: ${res.status}`);
+    const details = data.details
+      ? (typeof data.details === 'string' ? data.details : JSON.stringify(data.details))
+      : '';
+    throw new Error([data.error || `Request failed: ${res.status}`, details].filter(Boolean).join('：'));
   }
   return data;
 }
