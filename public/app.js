@@ -172,6 +172,7 @@ function setForm(site = null, credentials = {}) {
   form.id.value = site?.id || '';
   form.name.value = site?.name || 'Stone API';
   form.base_url.value = site?.base_url || 'https://www.shitoutk.com';
+  form.upstream_type.value = site?.upstream_type || 'auto';
   form.auth_mode.value = site?.auth_mode || 'password';
   form.email.value = credentials.email && !credentials.email.includes('*') ? credentials.email : '';
   form.password.value = '';
@@ -305,6 +306,7 @@ function renderRows() {
         <td>
           <strong>${escapeHtml(site.name)}</strong>
           <span class="url">${escapeHtml(site.base_url)}</span>
+          <small>type: ${escapeHtml(site.upstream_type || 'auto')}</small>
           <small>${escapeHtml((site.tags || []).join(' · '))}</small>
         </td>
         <td><span class="status ${escapeHtml(site.status)}">${escapeHtml(statusText(site.status))}</span></td>

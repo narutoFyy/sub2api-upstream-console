@@ -118,6 +118,7 @@ function sanitizeSitePayload(payload, { partial = false } = {}) {
 const siteSchema = z.object({
   name: z.string().min(1),
   base_url: z.string().url(),
+  upstream_type: z.enum(['auto', 'sub2api', 'new-api']).optional().default('auto'),
   auth_mode: z.enum(['password', 'token', 'api_key', 'admin']).default('password'),
   email: z.string().optional().default(''),
   password: z.string().optional().default(''),
@@ -128,6 +129,22 @@ const siteSchema = z.object({
   low_balance_threshold: z.number().min(0).max(100000000).optional().default(10),
   rate_change_threshold_percent: z.number().min(0).max(100000).optional().default(20),
   sync_interval_seconds: z.number().int().min(30).max(86400).optional().default(180)
+});
+
+const siteUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  base_url: z.string().url().optional(),
+  upstream_type: z.enum(['auto', 'sub2api', 'new-api']).optional(),
+  auth_mode: z.enum(['password', 'token', 'api_key', 'admin']).optional(),
+  email: z.string().optional(),
+  password: z.string().optional(),
+  token: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  codex_aliases: z.array(z.string()).optional(),
+  notes: z.string().optional(),
+  low_balance_threshold: z.number().min(0).max(100000000).optional(),
+  rate_change_threshold_percent: z.number().min(0).max(100000).optional(),
+  sync_interval_seconds: z.number().int().min(30).max(86400).optional()
 });
 
 const rechargeOrderSchema = z.object({
@@ -258,6 +275,7 @@ app.post('/api/upstreams/test', async (req, res, next) => {
     const payload = siteSchema.partial({ name: true }).parse(sanitizeSitePayload({ name: 'Test', ...req.body }));
     const result = await fetchSub2APIState({
       baseUrl: payload.base_url,
+      upstreamType: payload.upstream_type,
       email: payload.email,
       password: payload.password,
       token: payload.token,
@@ -300,7 +318,7 @@ app.get('/api/upstreams/:id/trends', (req, res) => {
 app.put('/api/upstreams/:id', (req, res, next) => {
   try {
     const id = Number(req.params.id);
-    const payload = siteSchema.partial().parse(sanitizeSitePayload(req.body, { partial: true }));
+    const payload = siteUpdateSchema.parse(sanitizeSitePayload(req.body, { partial: true }));
     for (const field of ['email', 'password', 'token']) {
       if (payload[field] === '') delete payload[field];
     }

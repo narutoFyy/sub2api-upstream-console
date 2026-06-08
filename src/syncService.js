@@ -20,6 +20,7 @@ async function syncSite(siteId) {
   try {
     const result = await fetchSub2APIState({
       baseUrl: site.base_url,
+      upstreamType: site.upstream_type || 'auto',
       email: creds.email,
       password: creds.password,
       token: creds.token,

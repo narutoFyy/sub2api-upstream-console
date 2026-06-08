@@ -64,11 +64,11 @@ function createSite(input) {
   const now = nowIso();
   const insertSite = db.prepare(`
     INSERT INTO upstream_sites (
-      name, base_url, auth_mode, status, tags, notes, codex_aliases,
+      name, base_url, upstream_type, auth_mode, status, tags, notes, codex_aliases,
       low_balance_threshold, rate_change_threshold_percent, sync_interval_seconds, created_at, updated_at
     )
     VALUES (
-      @name, @base_url, @auth_mode, 'active', @tags, @notes, @codex_aliases,
+      @name, @base_url, @upstream_type, @auth_mode, 'active', @tags, @notes, @codex_aliases,
       @low_balance_threshold, @rate_change_threshold_percent, @sync_interval_seconds, @now, @now
     )
   `);
@@ -76,6 +76,7 @@ function createSite(input) {
     const result = insertSite.run({
       name: input.name,
       base_url: baseUrl,
+      upstream_type: input.upstream_type || 'auto',
       auth_mode: input.auth_mode || 'password',
       tags: safeJson(input.tags || []),
       notes: input.notes || '',
@@ -101,6 +102,7 @@ function updateSite(id, input) {
   const next = {
     name: input.name ?? site.name,
     base_url: input.base_url ? normalizeBaseUrl(input.base_url) : site.base_url,
+    upstream_type: input.upstream_type ?? site.upstream_type ?? 'auto',
     auth_mode: input.auth_mode ?? site.auth_mode,
     status: input.status ?? site.status,
     tags: safeJson(input.tags ?? site.tags),
@@ -115,7 +117,7 @@ function updateSite(id, input) {
   const tx = db.transaction(() => {
     db.prepare(`
       UPDATE upstream_sites
-      SET name=@name, base_url=@base_url, auth_mode=@auth_mode, status=@status, tags=@tags,
+      SET name=@name, base_url=@base_url, upstream_type=@upstream_type, auth_mode=@auth_mode, status=@status, tags=@tags,
           notes=@notes, codex_aliases=@codex_aliases, low_balance_threshold=@low_balance_threshold,
           rate_change_threshold_percent=@rate_change_threshold_percent,
           sync_interval_seconds=@sync_interval_seconds, updated_at=@now

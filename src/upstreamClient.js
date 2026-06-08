@@ -618,6 +618,13 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
 }
 
 async function fetchSub2APIState(input) {
+  const upstreamType = input.upstreamType || input.upstream_type || 'auto';
+  if (upstreamType === 'sub2api') {
+    return fetchSub2APICompatibleState(input);
+  }
+  if (upstreamType === 'new-api' || upstreamType === 'newapi') {
+    return fetchNewAPIState(input);
+  }
   try {
     return await fetchSub2APICompatibleState(input);
   } catch (sub2apiError) {

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS upstream_sites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   base_url TEXT NOT NULL,
+  upstream_type TEXT NOT NULL DEFAULT 'auto',
   auth_mode TEXT NOT NULL DEFAULT 'password',
   status TEXT NOT NULL DEFAULT 'active',
   tags TEXT NOT NULL DEFAULT '[]',
@@ -186,6 +187,7 @@ function ensureColumn(table, column, definition) {
 }
 
 ensureColumn('upstream_sites', 'codex_aliases', `TEXT NOT NULL DEFAULT '["codex"]'`);
+ensureColumn('upstream_sites', 'upstream_type', `TEXT NOT NULL DEFAULT 'auto'`);
 ensureColumn('upstream_sites', 'low_balance_threshold', 'REAL NOT NULL DEFAULT 10');
 ensureColumn('upstream_sites', 'rate_change_threshold_percent', 'REAL NOT NULL DEFAULT 20');
 ensureColumn('upstream_current_snapshots', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
