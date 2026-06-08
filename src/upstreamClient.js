@@ -30,10 +30,20 @@ function upstreamErrorMessage(path, status, payload) {
   const metadata = body.metadata && typeof body.metadata === 'object'
     ? Object.entries(body.metadata).map(([key, value]) => `${key}=${value}`).join(', ')
     : '';
-  const detail = [code, message, metadata].filter(Boolean).join(' · ');
+  const detail = [code, message, metadata].filter(Boolean).join(' | ');
   return detail
-    ? `上游 ${path} 返回 ${status}：${detail}`
-    : `上游 ${path} 返回 ${status}`;
+    ? `Upstream ${path} returned ${status}: ${detail}`
+    : `Upstream ${path} returned ${status}`;
+}
+function extractCookie(headers) {
+  if (!headers || typeof headers.get !== 'function') return '';
+  const setCookie = headers.get('set-cookie') || '';
+  if (!setCookie) return '';
+  return setCookie
+    .split(/,(?=\s*[^;,=\s]+=[^;,]+)/)
+    .map((cookie) => cookie.split(';')[0].trim())
+    .filter(Boolean)
+    .join('; ');
 }
 
 function defaultPaymentReturnUrl(baseUrl) {
@@ -49,7 +59,9 @@ async function requestJson(baseUrl, path, options = {}) {
   const headers = {
     accept: 'application/json',
     ...(options.body ? { 'content-type': 'application/json' } : {}),
-    ...(options.token ? { authorization: `Bearer ${options.token}` } : {})
+    ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+    ...(options.cookie ? { cookie: options.cookie } : {}),
+    ...(options.headers || {})
   };
   const res = await fetch(joinUrl(baseUrl, path, options.prefix || '/api/v1'), {
     method: options.method || 'GET',
@@ -70,7 +82,14 @@ async function requestJson(baseUrl, path, options = {}) {
   if (payload && typeof payload === 'object' && payload.code && payload.code !== 0) {
     throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
   }
-  return unwrapSub2API(payload);
+  if (payload && typeof payload === 'object' && payload.success === false) {
+    throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
+  }
+  const data = unwrapSub2API(payload);
+  if (options.withMeta) {
+    return { data, payload, headers: res.headers, cookie: extractCookie(res.headers), status: res.status };
+  }
+  return data;
 }
 
 async function loginWithPassword(baseUrl, email, password) {
@@ -99,6 +118,29 @@ async function loginWithPassword(baseUrl, email, password) {
     }
   }
   throw new Error(`Login failed on known Sub2API paths: ${attempts.join('; ')}`);
+}
+
+async function loginWithNewAPI(baseUrl, email, password) {
+  const login = await requestJson(baseUrl, '/user/login', {
+    method: 'POST',
+    body: { username: email, password },
+    prefix: '/api',
+    withMeta: true
+  });
+  const user = login.data || {};
+  if (!user.id) {
+    throw new Error('New API login succeeded but no user id was returned');
+  }
+  if (!login.cookie) {
+    throw new Error('New API login succeeded but no session cookie was returned');
+  }
+  return {
+    user,
+    cookie: login.cookie,
+    headers: { 'New-Api-User': String(user.id) },
+    prefix: '/api',
+    login_path: '/user/login'
+  };
 }
 
 function extractBalance(profile) {
@@ -261,15 +303,215 @@ function normalizeRates(ratesPayload) {
   return [];
 }
 
+function normalizeAliases(aliases = ['codex']) {
+  if (Array.isArray(aliases)) return aliases;
+  if (typeof aliases === 'string') {
+    return aliases.split(',').map((alias) => alias.trim()).filter(Boolean);
+  }
+  return ['codex'];
+}
+
 function matchesAnyAlias(rate, aliases = ['codex']) {
   const haystack = `${rate.group_name} ${rate.scope} ${rate.model}`.toLowerCase();
-  return aliases
+  return normalizeAliases(aliases)
     .map((alias) => String(alias || '').trim().toLowerCase())
     .filter(Boolean)
     .some((alias) => haystack.includes(alias));
 }
 
-async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases }) {
+function normalizeNewAPIRates(groupsPayload, ratioConfigPayload = null) {
+  const out = [];
+  const groups = groupsPayload && typeof groupsPayload === 'object' ? groupsPayload : {};
+  for (const [groupName, info] of Object.entries(groups)) {
+    const rate = pickFirstNumber(info?.ratio);
+    if (rate !== null) {
+      out.push({
+        group_id: groupName,
+        group_name: groupName,
+        scope: 'new-api-group',
+        model: '',
+        rate,
+        raw: info
+      });
+    }
+  }
+
+  const ratioConfig = ratioConfigPayload && typeof ratioConfigPayload === 'object' ? ratioConfigPayload : {};
+  const modelRatio = ratioConfig.model_ratio || ratioConfig.modelRatio || {};
+  const groupRatio = ratioConfig.group_ratio || ratioConfig.groupRatio || {};
+  if (Object.keys(groups).length === 0 && groupRatio && typeof groupRatio === 'object') {
+    for (const [groupName, value] of Object.entries(groupRatio)) {
+      const rate = pickFirstNumber(value);
+      if (rate !== null) {
+        out.push({ group_id: groupName, group_name: groupName, scope: 'new-api-group', model: '', rate, raw: value });
+      }
+    }
+  }
+  if (modelRatio && typeof modelRatio === 'object') {
+    for (const [model, value] of Object.entries(modelRatio)) {
+      const rate = pickFirstNumber(value);
+      if (rate !== null) {
+        out.push({ group_id: model, group_name: model, scope: 'new-api-model', model, rate, raw: value });
+      }
+    }
+  }
+  return out;
+}
+
+function normalizeNewAPITokens(tokensPayload) {
+  if (Array.isArray(tokensPayload)) return tokensPayload;
+  if (Array.isArray(tokensPayload?.items)) return tokensPayload.items;
+  if (Array.isArray(tokensPayload?.data)) return tokensPayload.data;
+  return [];
+}
+
+function newAPIQuotaUnit(statusPayload) {
+  const unit = pickFirstNumber(statusPayload?.quota_per_unit, statusPayload?.quotaPerUnit);
+  return unit && unit > 0 ? unit : 500000;
+}
+
+function convertNewAPIQuota(value, unit) {
+  const n = pickFirstNumber(value);
+  return n === null ? null : n / unit;
+}
+
+function periodTimestampRange(days) {
+  const now = new Date();
+  const end = Math.floor(now.getTime() / 1000);
+  const startDate = new Date(now);
+  startDate.setHours(0, 0, 0, 0);
+  if (days > 1) {
+    startDate.setDate(startDate.getDate() - (days - 1));
+  }
+  return {
+    start: Math.floor(startDate.getTime() / 1000),
+    end
+  };
+}
+
+function buildNewAPIStatPath(days) {
+  const range = periodTimestampRange(days);
+  return `/log/self/stat?start_timestamp=${range.start}&end_timestamp=${range.end}`;
+}
+
+function normalizeNewAPIUsage(self, totalStat, todayStat, weekStat, monthStat, quotaUnit) {
+  return {
+    total_requests: toNumber(self?.request_count),
+    today_requests: 0,
+    total_tokens: 0,
+    today_tokens: 0,
+    total_cost: convertNewAPIQuota(self?.used_quota, quotaUnit) || 0,
+    today_cost: convertNewAPIQuota(todayStat?.quota, quotaUnit) || 0,
+    week_cost: convertNewAPIQuota(weekStat?.quota, quotaUnit) || 0,
+    month_cost: convertNewAPIQuota(monthStat?.quota, quotaUnit) || 0,
+    stat_quota: totalStat?.quota ?? null,
+    today_stat: todayStat || null,
+    week_stat: weekStat || null,
+    month_stat: monthStat || null,
+    by_platform: []
+  };
+}
+
+async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases }) {
+  if (token && (!email || !password)) {
+    throw new Error('New API user data requires account/password login because user endpoints require a session and New-Api-User header');
+  }
+  const login = await loginWithNewAPI(baseUrl, email, password);
+  const auth = { cookie: login.cookie, headers: login.headers, prefix: login.prefix };
+  const results = {};
+  const errors = {};
+
+  async function optional(name, path, options = {}) {
+    try {
+      results[name] = await requestJson(baseUrl, path, { ...auth, ...options });
+    } catch (err) {
+      errors[name] = [{ path, message: err.message, status: err.status || null }];
+      results[name] = null;
+    }
+  }
+
+  await optional('profile', '/user/self');
+  await optional('groups', '/user/self/groups');
+  await optional('models', '/models');
+  await optional('keys', '/token/?p=0&page_size=100');
+  await optional('totalStats', '/log/self/stat');
+  await optional('todayStats', buildNewAPIStatPath(1));
+  await optional('weekStats', buildNewAPIStatPath(7));
+  await optional('monthStats', buildNewAPIStatPath(30));
+  await optional('status', '/status');
+  await optional('ratioConfig', '/ratio_config', { cookie: '', headers: {} });
+
+  const profile = results.profile || login.user || {};
+  const quotaUnit = newAPIQuotaUnit(results.status || {});
+  const rates = normalizeNewAPIRates(results.groups, results.ratioConfig);
+  const codexRates = rates.filter((item) => matchesAnyAlias(item, codexAliases));
+  const allRateValues = rates.map((item) => item.rate).filter(Number.isFinite);
+  const codexRate = codexRates.length ? Math.min(...codexRates.map((item) => item.rate)) : null;
+  const keyItems = normalizeNewAPITokens(results.keys);
+  const usage = normalizeNewAPIUsage(profile, results.totalStats, results.todayStats, results.weekStats, results.monthStats, quotaUnit);
+  const payment = {
+    enabled: false,
+    balance_recharge_disabled: true,
+    balance_recharge_multiplier: null,
+    recharge_fee_rate: null,
+    payment_plan_count: 0,
+    methods: [],
+    plans: []
+  };
+
+  return {
+    token: token || null,
+    login: {
+      provider: 'new-api',
+      prefix: login.prefix,
+      login_path: login.login_path,
+      user_id: login.user.id,
+      raw: login.user
+    },
+    profile,
+    usage,
+    rates,
+    keys: keyItems,
+    channels: null,
+    groups: results.groups,
+    payment,
+    errors,
+    snapshot: {
+      balance: convertNewAPIQuota(profile?.quota, quotaUnit),
+      balance_currency: results.status?.quota_display_type || results.status?.display_in_currency || 'quota',
+      username: profile?.username || profile?.display_name || '',
+      email: profile?.email || email || '',
+      role: String(profile?.role ?? ''),
+      total_requests: usage.total_requests,
+      today_requests: usage.today_requests,
+      total_tokens: usage.total_tokens,
+      today_tokens: usage.today_tokens,
+      total_cost: usage.total_cost,
+      today_cost: usage.today_cost,
+      week_requests: 0,
+      week_tokens: 0,
+      week_cost: usage.week_cost,
+      month_requests: 0,
+      month_tokens: 0,
+      month_cost: usage.month_cost,
+      codex_rate: codexRate,
+      min_rate: allRateValues.length ? Math.min(...allRateValues) : null,
+      max_rate: allRateValues.length ? Math.max(...allRateValues) : null,
+      payment_enabled: 0,
+      balance_recharge_disabled: 1,
+      balance_recharge_multiplier: null,
+      recharge_fee_rate: null,
+      payment_plan_count: 0,
+      payment_methods: '[]',
+      group_count: rates.length,
+      key_count: keyItems.length,
+      channel_count: 0
+    },
+    raw: results
+  };
+}
+
+async function fetchSub2APICompatibleState({ baseUrl, email, password, token, codexAliases }) {
   let activeToken = token;
   let login = null;
   if (!activeToken) {
@@ -373,6 +615,18 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
     },
     raw: results
   };
+}
+
+async function fetchSub2APIState(input) {
+  try {
+    return await fetchSub2APICompatibleState(input);
+  } catch (sub2apiError) {
+    try {
+      return await fetchNewAPIState(input);
+    } catch (newAPIError) {
+      throw new Error(`Sync failed. Sub2API: ${sub2apiError.message}; New API: ${newAPIError.message}`);
+    }
+  }
 }
 
 async function getUpstreamToken({ baseUrl, email, password, token }) {
