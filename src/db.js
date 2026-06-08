@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS upstream_current_snapshots (
   balance_recharge_multiplier REAL,
   recharge_fee_rate REAL,
   payment_plan_count INTEGER NOT NULL DEFAULT 0,
+  payment_methods TEXT NOT NULL DEFAULT '[]',
   group_count INTEGER NOT NULL DEFAULT 0,
   key_count INTEGER NOT NULL DEFAULT 0,
   channel_count INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS upstream_snapshot_history (
   balance_recharge_multiplier REAL,
   recharge_fee_rate REAL,
   payment_plan_count INTEGER NOT NULL DEFAULT 0,
+  payment_methods TEXT NOT NULL DEFAULT '[]',
   group_count INTEGER NOT NULL DEFAULT 0,
   key_count INTEGER NOT NULL DEFAULT 0,
   channel_count INTEGER NOT NULL DEFAULT 0,
@@ -151,6 +153,29 @@ CREATE TABLE IF NOT EXISTS sync_logs (
   summary TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS recharge_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upstream_site_id INTEGER NOT NULL,
+  upstream_order_id TEXT NOT NULL DEFAULT '',
+  out_trade_no TEXT NOT NULL DEFAULT '',
+  amount REAL,
+  pay_amount REAL,
+  fee_rate REAL,
+  payment_type TEXT NOT NULL DEFAULT '',
+  payment_mode TEXT NOT NULL DEFAULT '',
+  result_type TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  pay_url TEXT NOT NULL DEFAULT '',
+  qr_code TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL DEFAULT '',
+  raw_payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_recharge_orders_site_time ON recharge_orders(upstream_site_id, created_at);
 `);
 
 function ensureColumn(table, column, definition) {
@@ -175,6 +200,7 @@ ensureColumn('upstream_current_snapshots', 'balance_recharge_disabled', 'INTEGER
 ensureColumn('upstream_current_snapshots', 'balance_recharge_multiplier', 'REAL');
 ensureColumn('upstream_current_snapshots', 'recharge_fee_rate', 'REAL');
 ensureColumn('upstream_current_snapshots', 'payment_plan_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'payment_methods', `TEXT NOT NULL DEFAULT '[]'`);
 ensureColumn('upstream_snapshot_history', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_cost', 'REAL NOT NULL DEFAULT 0');
@@ -187,5 +213,6 @@ ensureColumn('upstream_snapshot_history', 'balance_recharge_disabled', 'INTEGER 
 ensureColumn('upstream_snapshot_history', 'balance_recharge_multiplier', 'REAL');
 ensureColumn('upstream_snapshot_history', 'recharge_fee_rate', 'REAL');
 ensureColumn('upstream_snapshot_history', 'payment_plan_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'payment_methods', `TEXT NOT NULL DEFAULT '[]'`);
 
 module.exports = db;

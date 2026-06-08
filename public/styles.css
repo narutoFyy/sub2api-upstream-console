@@ -488,6 +488,69 @@ td {
   font-family: "Trebuchet MS", Verdana, sans-serif;
 }
 
+.recharge-box {
+  margin: 10px 0 20px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.recharge-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.payment-order {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.42);
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+}
+
+.payment-order small {
+  color: var(--muted);
+}
+
+.payment-qr {
+  width: 180px;
+  height: 180px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 8px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.qr-text {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 8px 12px;
+  color: #fffaf0;
+  background: var(--accent);
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+  font-weight: 800;
+  text-decoration: none;
+}
+
 .capabilities {
   display: flex;
   gap: 8px;
@@ -532,6 +595,7 @@ td {
   .hero, .panel-title { align-items: stretch; flex-direction: column; }
   .cards, .grid-form, .split, .rate-grid, .rate-grid.compact, .detail-grid { grid-template-columns: 1fr; }
   .login-form, .toolbar, .form-actions, .hero-actions { align-items: stretch; flex-direction: column; }
+  .recharge-form { grid-template-columns: 1fr; }
   .toolbar input, .toolbar select { width: 100%; }
   table { min-width: 760px; }
   main { width: min(100vw - 20px, 1280px); padding-top: 18px; }

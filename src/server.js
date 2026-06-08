@@ -6,7 +6,7 @@ const config = require('./config');
 const repo = require('./repository');
 const { seedFromEnv } = require('./seed');
 const { syncSite, syncAllSites, syncDueSites } = require('./syncService');
-const { fetchSub2APIState } = require('./upstreamClient');
+const { createPaymentOrder, fetchSub2APIState, getPaymentOrder } = require('./upstreamClient');
 
 const app = express();
 
@@ -60,7 +60,27 @@ function maskEmail(email) {
 function withoutRawPayload(row) {
   if (!row) return row;
   const { raw_payload, raw, ...safeRow } = row;
+  if (typeof safeRow.payment_methods === 'string') {
+    try {
+      safeRow.payment_methods = JSON.parse(safeRow.payment_methods || '[]');
+    } catch {
+      safeRow.payment_methods = [];
+    }
+  }
   return safeRow;
+}
+
+function availablePaymentMethods(snapshot) {
+  if (!snapshot) return [];
+  if (Array.isArray(snapshot.payment_methods)) return snapshot.payment_methods;
+  if (typeof snapshot.payment_methods === 'string') {
+    try {
+      return JSON.parse(snapshot.payment_methods || '[]');
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 function safeCredentials(credentials) {
@@ -110,6 +130,15 @@ const siteSchema = z.object({
   sync_interval_seconds: z.number().int().min(30).max(86400).optional().default(180)
 });
 
+const rechargeOrderSchema = z.object({
+  amount: z.number().positive().max(1000000),
+  payment_type: z.string().min(1).default('alipay'),
+  order_type: z.enum(['balance', 'subscription']).default('balance'),
+  plan_id: z.number().int().positive().optional(),
+  return_url: z.string().url().optional(),
+  is_mobile: z.boolean().optional().default(false)
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
@@ -145,6 +174,23 @@ app.get('/api/dashboard', (req, res) => {
     ...site,
     has_unacknowledged_rate_change: changedSiteIds.has(Number(site.id))
   }));
+  const rechargeAlerts = sites
+    .filter((site) => Number.isFinite(Number(site.balance)) && Number(site.balance) < Number(site.low_balance_threshold || 10))
+    .map((site) => {
+      const threshold = Number(site.low_balance_threshold || 10);
+      const balance = Number(site.balance || 0);
+      const methods = availablePaymentMethods(site).filter((item) => item?.type && item?.available !== false);
+      return {
+        id: site.id,
+        name: site.name,
+        base_url: site.base_url,
+        balance,
+        threshold,
+        suggested_amount: Math.max(1, Number((threshold - balance).toFixed(2))),
+        payment_supported: Boolean(Number(site.payment_enabled) && !Number(site.balance_recharge_disabled) && methods.length > 0),
+        payment_methods: methods
+      };
+    });
   const changes = repo.listRateChanges(20);
   const unacknowledgedChanges = repo.countUnacknowledgedRateChanges();
   const totals = sites.reduce((acc, site) => {
@@ -156,7 +202,7 @@ app.get('/api/dashboard', (req, res) => {
     if (site.last_sync_at) acc.synced += 1;
     return acc;
   }, { upstreams: sites.length, active: 0, failed: 0, low_balance: 0, synced: 0, today_tokens: 0, today_cost: 0 });
-  res.json({ totals: { ...totals, unacknowledged_changes: unacknowledgedChanges }, sites, changes });
+  res.json({ totals: { ...totals, unacknowledged_changes: unacknowledgedChanges }, sites, changes, recharge_alerts: rechargeAlerts });
 });
 
 app.get('/api/export', (req, res) => {
@@ -238,6 +284,7 @@ app.get('/api/upstreams/:id', (req, res) => {
     snapshot: withoutRawPayload(repo.getSnapshot(id)),
     rates: repo.listRates(id, 300).map(withoutRawPayload),
     logs: repo.listSyncLogs(id, 100),
+    recharge_orders: repo.listRechargeOrders(id, 20).map(withoutRawPayload),
     history: repo.listSnapshotHistory(id, 120).map(withoutRawPayload),
     capabilities: repo.capabilityMatrix(id)
   });
@@ -304,6 +351,67 @@ app.post('/api/sync-all', async (req, res, next) => {
 
 app.get('/api/rate-changes', (req, res) => {
   res.json({ items: repo.listRateChanges(200) });
+});
+
+app.post('/api/upstreams/:id/recharge-orders', async (req, res, next) => {
+  try {
+    const siteId = Number(req.params.id);
+    const site = repo.getSite(siteId);
+    if (!site) return res.status(404).json({ error: 'Not found' });
+    const snapshot = repo.getSnapshot(siteId);
+    const methods = availablePaymentMethods(snapshot).filter((item) => item?.type && item?.available !== false);
+    const paymentSupported = Boolean(snapshot && Number(snapshot.payment_enabled) && !Number(snapshot.balance_recharge_disabled) && methods.length > 0);
+    if (!paymentSupported) {
+      return res.status(422).json({ error: '该上游不支持在线充值或已关闭余额充值' });
+    }
+    const payload = rechargeOrderSchema.parse(req.body || {});
+    if (!methods.some((item) => item.type === payload.payment_type)) {
+      return res.status(422).json({ error: `该上游不支持 ${payload.payment_type} 充值` });
+    }
+    const creds = repo.getCredentials(siteId) || {};
+    const order = await createPaymentOrder({
+      baseUrl: site.base_url,
+      email: creds.email,
+      password: creds.password,
+      token: creds.token,
+      amount: payload.amount,
+      paymentType: payload.payment_type,
+      orderType: payload.order_type,
+      planId: payload.plan_id,
+      returnUrl: payload.return_url,
+      isMobile: payload.is_mobile
+    });
+    const saved = repo.saveRechargeOrder(siteId, order);
+    res.status(201).json({ order: withoutRawPayload(saved) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/recharge-orders/:id/refresh', async (req, res, next) => {
+  try {
+    const localOrder = repo.getRechargeOrder(Number(req.params.id));
+    if (!localOrder) return res.status(404).json({ error: 'Not found' });
+    if (!localOrder.upstream_order_id) {
+      return res.status(422).json({ error: '该订单缺少上游订单 ID，无法回查' });
+    }
+    const site = repo.getSite(localOrder.upstream_site_id);
+    const creds = repo.getCredentials(localOrder.upstream_site_id) || {};
+    const order = await getPaymentOrder({
+      baseUrl: site.base_url,
+      email: creds.email,
+      password: creds.password,
+      token: creds.token,
+      orderId: localOrder.upstream_order_id
+    });
+    const saved = repo.updateRechargeOrder(localOrder.id, order);
+    if (['COMPLETED', 'PAID', 'RECHARGING'].includes(String(saved.status).toUpperCase())) {
+      syncSite(localOrder.upstream_site_id).catch((err) => console.error('Post-recharge sync failed:', err));
+    }
+    res.json({ order: withoutRawPayload(saved) });
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.post('/api/rate-changes/:id/ack', (req, res) => {

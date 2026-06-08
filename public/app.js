@@ -50,6 +50,32 @@ function rechargeMetaText(site) {
   return parts.join(' · ');
 }
 
+function parsePaymentMethods(site) {
+  const raw = site?.payment_methods;
+  if (Array.isArray(raw)) return raw.filter((item) => item?.type && item?.available !== false);
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw || '[]');
+      return Array.isArray(parsed) ? parsed.filter((item) => item?.type && item?.available !== false) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function paymentMethodLabel(type) {
+  return {
+    alipay: '支付宝',
+    wxpay: '微信支付',
+    alipay_direct: '支付宝直连',
+    wxpay_direct: '微信直连',
+    stripe: 'Stripe',
+    easypay: '易支付',
+    airwallex: 'Airwallex'
+  }[type] || type;
+}
+
 function timeText(value) {
   if (!value) return '从未同步';
   return new Date(value).toLocaleString('zh-CN');
@@ -182,6 +208,27 @@ function renderCards(totals) {
       <strong>${escapeHtml(value)}</strong>
     </article>
   `).join('');
+}
+
+function renderRechargeAlerts(alerts = []) {
+  const panel = document.querySelector('#rechargeAlertsPanel');
+  const container = document.querySelector('#rechargeAlerts');
+  if (!alerts.length) {
+    panel.hidden = true;
+    container.innerHTML = '';
+    return;
+  }
+  panel.hidden = false;
+  container.innerHTML = alerts.map((item) => {
+    const methods = (item.payment_methods || []).map((method) => paymentMethodLabel(method.type)).join('、');
+    return `
+      <div class="list-item">
+        <strong>${escapeHtml(item.name)} · 余额 ${money.format(item.balance)} / 阈值 ${money.format(item.threshold)}</strong>
+        <small>建议至少充值 RMB ${money.format(item.suggested_amount)} · ${item.payment_supported ? `官方可用：${escapeHtml(methods)}` : '该上游不支持在线充值'}</small>
+        <button class="ghost" data-detail-id="${item.id}">查看详情</button>
+      </div>
+    `;
+  }).join('');
 }
 
 function statusText(status) {
@@ -375,6 +422,58 @@ function renderCapabilities(capabilities = {}) {
   `).join('');
 }
 
+function renderRechargePanel(detail) {
+  const snapshot = detail.snapshot || {};
+  const methods = parsePaymentMethods(snapshot);
+  const supported = Number(snapshot.payment_enabled) && !Number(snapshot.balance_recharge_disabled) && methods.length > 0;
+  if (!supported) {
+    return `
+      <h3>在线充值</h3>
+      <p class="empty">该上游不支持在线充值，或已关闭余额充值。</p>
+    `;
+  }
+  const latestOrder = (detail.recharge_orders || [])[0];
+  return `
+    <h3>在线充值</h3>
+    <div class="recharge-box">
+      <div class="recharge-form">
+        <label>充值金额 RMB<input data-recharge-amount="${detail.site.id}" type="number" min="1" step="0.01" value="10" /></label>
+        <label>支付方式
+          <select data-recharge-method="${detail.site.id}">
+            ${methods.map((method) => `<option value="${escapeHtml(method.type)}">${escapeHtml(paymentMethodLabel(method.type))}</option>`).join('')}
+          </select>
+        </label>
+        <button class="secondary" data-create-recharge="${detail.site.id}">创建充值订单</button>
+      </div>
+      <p class="detail-note">只调用上游官方订单接口。支付确认仍由支付宝、微信或上游收银台完成。</p>
+      <div id="rechargeOrderBox-${detail.site.id}">
+        ${latestOrder ? renderRechargeOrder(latestOrder) : '<p class="empty">暂无充值订单。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderRechargeOrder(order) {
+  const qr = order.qr_code || '';
+  const payUrl = order.pay_url || '';
+  const qrImage = qr.startsWith('http') || qr.startsWith('data:image')
+    ? `<img class="payment-qr" src="${escapeHtml(qr)}" alt="支付二维码" />`
+    : '';
+  const qrText = qr && !qrImage ? `<code class="qr-text">${escapeHtml(qr)}</code>` : '';
+  return `
+    <div class="payment-order">
+      <strong>订单 #${escapeHtml(order.upstream_order_id || order.id)} · ${escapeHtml(order.status || 'PENDING')}</strong>
+      <small>支付 ${money.format(order.pay_amount || order.amount || 0)} · ${escapeHtml(order.payment_type || '')} · ${timeText(order.created_at)}</small>
+      ${qrImage}
+      ${qrText}
+      <div class="form-actions">
+        ${payUrl ? `<a class="button-link" href="${escapeHtml(payUrl)}" target="_blank" rel="noreferrer">打开收银台</a>` : ''}
+        <button class="ghost" data-refresh-recharge="${order.id}">刷新订单状态</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderDetail(detail) {
   const snapshot = detail.snapshot || {};
   document.querySelector('#detailTitle').textContent = `上游详情：${detail.site.name}`;
@@ -398,6 +497,7 @@ function renderDetail(detail) {
     ${rechargeMetaText(snapshot) ? `<p class="detail-note">${escapeHtml(rechargeMetaText(snapshot))}</p>` : ''}
     <h3>接口能力矩阵</h3>
     <div class="capabilities">${renderCapabilities(detail.capabilities)}</div>
+    ${renderRechargePanel(detail)}
     <h3>余额 / 用量趋势</h3>
     ${trendSvg(detail.history || [])}
     <h3>最近倍率</h3>
@@ -441,6 +541,7 @@ async function refresh() {
   state.logs = logs.items || [];
   await loadDetails(dashboard.sites || []);
   renderCards(dashboard.totals);
+  renderRechargeAlerts(dashboard.recharge_alerts || []);
   renderRows();
   renderRateChanges(dashboard.changes || []);
   renderLogs(state.logs.slice(0, 20));
@@ -606,6 +707,34 @@ document.addEventListener('click', async (event) => {
   if (ackRateChangeId) {
     await api(`/api/rate-changes/${ackRateChangeId}/ack`, { method: 'POST' });
     await refresh();
+  }
+
+  const createRechargeId = event.target?.dataset?.createRecharge;
+  if (createRechargeId) {
+    await withButton(event.target, '创建中...', async () => {
+      const amount = Number(document.querySelector(`[data-recharge-amount="${createRechargeId}"]`)?.value || 0);
+      const paymentType = document.querySelector(`[data-recharge-method="${createRechargeId}"]`)?.value || 'alipay';
+      const result = await api(`/api/upstreams/${createRechargeId}/recharge-orders`, {
+        method: 'POST',
+        body: JSON.stringify({ amount, payment_type: paymentType, order_type: 'balance', is_mobile: false })
+      });
+      document.querySelector(`#rechargeOrderBox-${createRechargeId}`).innerHTML = renderRechargeOrder(result.order);
+      await refresh();
+    });
+  }
+
+  const refreshRechargeId = event.target?.dataset?.refreshRecharge;
+  if (refreshRechargeId) {
+    await withButton(event.target, '刷新中...', async () => {
+      const result = await api(`/api/recharge-orders/${refreshRechargeId}/refresh`, { method: 'POST' });
+      const detail = state.selectedDetailId ? await api(`/api/upstreams/${state.selectedDetailId}`) : null;
+      if (detail) {
+        state.details.set(Number(detail.site.id), detail);
+        renderDetail(detail);
+      } else {
+        event.target.closest('.payment-order').outerHTML = renderRechargeOrder(result.order);
+      }
+    });
   }
 });
 

@@ -129,6 +129,25 @@ function normalizePaymentInfo(checkoutInfo, configInfo = null, plansInfo = null)
   const checkout = unwrapSub2API(checkoutInfo);
   const config = unwrapSub2API(configInfo) || {};
   const source = checkout && typeof checkout === 'object' ? checkout : config;
+  const sourceMethods = source?.methods && typeof source.methods === 'object'
+    ? Object.entries(source.methods)
+    : [];
+  const configTypes = Array.isArray(config?.enabled_payment_types) ? config.enabled_payment_types : [];
+  const methods = sourceMethods
+    .filter(([type, info]) => type && (info?.available ?? true))
+    .map(([type, info]) => ({
+      type,
+      currency: info?.currency || '',
+      single_min: pickFirstNumber(info?.single_min),
+      single_max: pickFirstNumber(info?.single_max),
+      fee_rate: pickFirstNumber(info?.fee_rate),
+      available: Boolean(info?.available ?? true)
+    }));
+  if (methods.length === 0) {
+    for (const type of configTypes) {
+      methods.push({ type: String(type), currency: '', single_min: null, single_max: null, fee_rate: null, available: true });
+    }
+  }
   const planSource = plansInfo ?? checkout?.plans ?? [];
   const plans = Array.isArray(unwrapSub2API(planSource))
     ? unwrapSub2API(planSource)
@@ -144,6 +163,7 @@ function normalizePaymentInfo(checkoutInfo, configInfo = null, plansInfo = null)
     balance_recharge_multiplier: multiplier,
     recharge_fee_rate: feeRate,
     payment_plan_count: plans.length,
+    methods,
     plans: plans.map((plan) => ({
       id: plan?.id ?? null,
       name: plan?.name || plan?.product_name || '',
@@ -329,6 +349,7 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
       balance_recharge_multiplier: payment.balance_recharge_multiplier,
       recharge_fee_rate: payment.recharge_fee_rate,
       payment_plan_count: payment.payment_plan_count,
+      payment_methods: JSON.stringify(payment.methods || []),
       group_count: rates.length,
       key_count: keyItems.length,
       channel_count: channelItems.length
@@ -337,10 +358,70 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
   };
 }
 
+async function getUpstreamToken({ baseUrl, email, password, token }) {
+  if (token) {
+    return { token, prefix: '/api/v1' };
+  }
+  const login = await loginWithPassword(baseUrl, email, password);
+  return { token: login.token, prefix: login.prefix || '/api/v1' };
+}
+
+function normalizePaymentOrder(payload) {
+  const data = unwrapSub2API(payload) || {};
+  return {
+    raw: data,
+    order_id: data.order_id ?? data.id ?? null,
+    out_trade_no: data.out_trade_no || data.trade_no || '',
+    status: data.status || '',
+    amount: data.amount ?? null,
+    pay_amount: data.pay_amount ?? data.amount ?? null,
+    fee_rate: data.fee_rate ?? null,
+    payment_type: data.payment_type || '',
+    payment_mode: data.payment_mode || '',
+    result_type: data.result_type || '',
+    pay_url: data.pay_url || data.payment_url || data.checkout_url || data.url || data.oauth?.authorize_url || '',
+    qr_code: data.qr_code || data.qrcode || data.code_url || data.qr_url || '',
+    expires_at: data.expires_at || '',
+    resume_token: data.resume_token || '',
+    oauth: data.oauth || null,
+    jsapi: data.jsapi || data.jsapi_payload || null
+  };
+}
+
+async function createPaymentOrder({ baseUrl, email, password, token, amount, paymentType, orderType = 'balance', planId, returnUrl, isMobile = false }) {
+  const auth = await getUpstreamToken({ baseUrl, email, password, token });
+  const body = {
+    amount,
+    payment_type: paymentType,
+    order_type: orderType,
+    is_mobile: isMobile,
+    ...(planId ? { plan_id: planId } : {}),
+    ...(returnUrl ? { return_url: returnUrl } : {})
+  };
+  const data = await requestJson(baseUrl, '/payment/orders', {
+    method: 'POST',
+    body,
+    token: auth.token,
+    prefix: auth.prefix
+  });
+  return normalizePaymentOrder(data);
+}
+
+async function getPaymentOrder({ baseUrl, email, password, token, orderId }) {
+  const auth = await getUpstreamToken({ baseUrl, email, password, token });
+  const data = await requestJson(baseUrl, `/payment/orders/${orderId}`, {
+    token: auth.token,
+    prefix: auth.prefix
+  });
+  return normalizePaymentOrder(data);
+}
+
 module.exports = {
   UpstreamHTTPError,
   fetchSub2APIState,
   normalizeRates,
   loginWithPassword,
-  requestJson
+  requestJson,
+  createPaymentOrder,
+  getPaymentOrder
 };

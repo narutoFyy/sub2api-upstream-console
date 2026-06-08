@@ -5,10 +5,17 @@ const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
 
 function rowToSite(row) {
   if (!row) return null;
+  let paymentMethods = [];
+  try {
+    paymentMethods = JSON.parse(row.payment_methods || '[]');
+  } catch {
+    paymentMethods = [];
+  }
   return {
     ...row,
     tags: JSON.parse(row.tags || '[]'),
-    codex_aliases: JSON.parse(row.codex_aliases || '["codex"]')
+    codex_aliases: JSON.parse(row.codex_aliases || '["codex"]'),
+    payment_methods: paymentMethods
   };
 }
 
@@ -19,7 +26,7 @@ function listSites() {
            c.total_requests, c.total_tokens, c.total_cost,
            c.codex_rate, c.min_rate, c.max_rate,
            c.payment_enabled, c.balance_recharge_disabled, c.balance_recharge_multiplier,
-           c.recharge_fee_rate, c.payment_plan_count,
+           c.recharge_fee_rate, c.payment_plan_count, c.payment_methods,
            c.group_count, c.key_count, c.channel_count
     FROM upstream_sites s
     LEFT JOIN upstream_current_snapshots c ON c.upstream_site_id = s.id
@@ -166,14 +173,14 @@ function saveSyncSuccess(siteId, result) {
         total_requests, today_requests, total_tokens, today_tokens, total_cost, today_cost,
         week_requests, week_tokens, week_cost, month_requests, month_tokens, month_cost,
         codex_rate, min_rate, max_rate, payment_enabled, balance_recharge_disabled,
-        balance_recharge_multiplier, recharge_fee_rate, payment_plan_count,
+        balance_recharge_multiplier, recharge_fee_rate, payment_plan_count, payment_methods,
         group_count, key_count, channel_count, raw_payload, captured_at
       ) VALUES (
         @siteId, @balance, @balance_currency, @username, @email, @role,
         @total_requests, @today_requests, @total_tokens, @today_tokens, @total_cost, @today_cost,
         @week_requests, @week_tokens, @week_cost, @month_requests, @month_tokens, @month_cost,
         @codex_rate, @min_rate, @max_rate, @payment_enabled, @balance_recharge_disabled,
-        @balance_recharge_multiplier, @recharge_fee_rate, @payment_plan_count,
+        @balance_recharge_multiplier, @recharge_fee_rate, @payment_plan_count, @payment_methods,
         @group_count, @key_count, @channel_count, @raw_payload, @now
       )
       ON CONFLICT(upstream_site_id) DO UPDATE SET
@@ -185,7 +192,7 @@ function saveSyncSuccess(siteId, result) {
         min_rate=@min_rate, max_rate=@max_rate, group_count=@group_count, key_count=@key_count,
         payment_enabled=@payment_enabled, balance_recharge_disabled=@balance_recharge_disabled,
         balance_recharge_multiplier=@balance_recharge_multiplier, recharge_fee_rate=@recharge_fee_rate,
-        payment_plan_count=@payment_plan_count,
+        payment_plan_count=@payment_plan_count, payment_methods=@payment_methods,
         channel_count=@channel_count,
         raw_payload=@raw_payload, captured_at=@now
     `).run({
@@ -201,13 +208,13 @@ function saveSyncSuccess(siteId, result) {
         total_tokens, today_tokens, total_cost, today_cost, codex_rate, min_rate,
         week_requests, week_tokens, week_cost, month_requests, month_tokens, month_cost,
         max_rate, payment_enabled, balance_recharge_disabled, balance_recharge_multiplier,
-        recharge_fee_rate, payment_plan_count, group_count, key_count, channel_count, captured_at
+        recharge_fee_rate, payment_plan_count, payment_methods, group_count, key_count, channel_count, captured_at
       ) VALUES (
         @siteId, @balance, @balance_currency, @total_requests, @today_requests,
         @total_tokens, @today_tokens, @total_cost, @today_cost, @codex_rate, @min_rate,
         @week_requests, @week_tokens, @week_cost, @month_requests, @month_tokens, @month_cost,
         @max_rate, @payment_enabled, @balance_recharge_disabled, @balance_recharge_multiplier,
-        @recharge_fee_rate, @payment_plan_count, @group_count, @key_count, @channel_count, @now
+        @recharge_fee_rate, @payment_plan_count, @payment_methods, @group_count, @key_count, @channel_count, @now
       )
     `).run({
       siteId,
@@ -365,9 +372,75 @@ function capabilityMatrix(siteId) {
     rates: rates.length > 0 || Number(snapshot?.group_count || 0) > 0,
     keys: Number(snapshot?.key_count || 0) > 0,
     channels: Number(snapshot?.channel_count || 0) > 0,
-    payment: Boolean(snapshot && (snapshot.balance_recharge_multiplier !== null || Number(snapshot.payment_plan_count || 0) > 0)),
+    payment: Boolean(snapshot && Number(snapshot.payment_enabled) && !Number(snapshot.balance_recharge_disabled)),
     errors: latestLog?.status === 'failed' ? [latestLog.error_message] : []
   };
+}
+
+function saveRechargeOrder(siteId, order) {
+  const now = nowIso();
+  const result = db.prepare(`
+    INSERT INTO recharge_orders (
+      upstream_site_id, upstream_order_id, out_trade_no, amount, pay_amount, fee_rate,
+      payment_type, payment_mode, result_type, status, pay_url, qr_code, expires_at,
+      raw_payload, created_at, updated_at
+    ) VALUES (
+      @siteId, @upstream_order_id, @out_trade_no, @amount, @pay_amount, @fee_rate,
+      @payment_type, @payment_mode, @result_type, @status, @pay_url, @qr_code, @expires_at,
+      @raw_payload, @now, @now
+    )
+  `).run({
+    siteId,
+    upstream_order_id: String(order.order_id || ''),
+    out_trade_no: order.out_trade_no || '',
+    amount: order.amount,
+    pay_amount: order.pay_amount,
+    fee_rate: order.fee_rate,
+    payment_type: order.payment_type || '',
+    payment_mode: order.payment_mode || '',
+    result_type: order.result_type || '',
+    status: order.status || '',
+    pay_url: order.pay_url || '',
+    qr_code: order.qr_code || '',
+    expires_at: order.expires_at || '',
+    raw_payload: safeJson(order.raw || {}),
+    now
+  });
+  return getRechargeOrder(result.lastInsertRowid);
+}
+
+function updateRechargeOrder(id, order) {
+  const existing = getRechargeOrder(id);
+  if (!existing) return null;
+  const now = nowIso();
+  db.prepare(`
+    UPDATE recharge_orders
+    SET status=@status, pay_url=@pay_url, qr_code=@qr_code, expires_at=@expires_at,
+        raw_payload=@raw_payload, updated_at=@now
+    WHERE id=@id
+  `).run({
+    id,
+    status: order.status || existing.status || '',
+    pay_url: order.pay_url || existing.pay_url || '',
+    qr_code: order.qr_code || existing.qr_code || '',
+    expires_at: order.expires_at || existing.expires_at || '',
+    raw_payload: safeJson(order.raw || {}),
+    now
+  });
+  return getRechargeOrder(id);
+}
+
+function getRechargeOrder(id) {
+  return db.prepare('SELECT * FROM recharge_orders WHERE id = ?').get(id) || null;
+}
+
+function listRechargeOrders(siteId, limit = 20) {
+  return db.prepare(`
+    SELECT * FROM recharge_orders
+    WHERE upstream_site_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?
+  `).all(siteId, limit);
 }
 
 function exportSites({ includeSecrets = false } = {}) {
@@ -402,6 +475,10 @@ module.exports = {
   acknowledgeRateChange,
   listSyncLogs,
   capabilityMatrix,
+  saveRechargeOrder,
+  updateRechargeOrder,
+  getRechargeOrder,
+  listRechargeOrders,
   exportSites,
   pruneTelemetry
 };
