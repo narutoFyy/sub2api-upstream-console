@@ -125,6 +125,38 @@ function extractPeriodUsage(stats) {
   };
 }
 
+function normalizePaymentInfo(checkoutInfo, configInfo = null, plansInfo = null) {
+  const checkout = unwrapSub2API(checkoutInfo);
+  const config = unwrapSub2API(configInfo) || {};
+  const source = checkout && typeof checkout === 'object' ? checkout : config;
+  const planSource = plansInfo ?? checkout?.plans ?? [];
+  const plans = Array.isArray(unwrapSub2API(planSource))
+    ? unwrapSub2API(planSource)
+    : Array.isArray(unwrapSub2API(planSource)?.items)
+      ? unwrapSub2API(planSource).items
+      : [];
+  const multiplier = pickFirstNumber(source?.balance_recharge_multiplier, config?.balance_recharge_multiplier);
+  const feeRate = pickFirstNumber(source?.recharge_fee_rate, config?.recharge_fee_rate);
+  const balanceDisabled = Boolean(source?.balance_disabled || source?.balance_recharge_disabled);
+  return {
+    enabled: Boolean(source?.enabled ?? (checkout !== null && checkout !== undefined)),
+    balance_recharge_disabled: balanceDisabled,
+    balance_recharge_multiplier: multiplier,
+    recharge_fee_rate: feeRate,
+    payment_plan_count: plans.length,
+    plans: plans.map((plan) => ({
+      id: plan?.id ?? null,
+      name: plan?.name || plan?.product_name || '',
+      price: pickFirstNumber(plan?.price),
+      original_price: pickFirstNumber(plan?.original_price),
+      group_name: plan?.group_name || '',
+      group_platform: plan?.group_platform || '',
+      rate_multiplier: pickFirstNumber(plan?.rate_multiplier),
+      raw: plan
+    }))
+  };
+}
+
 function flattenRateEntry(group, path = []) {
   const out = [];
   if (!group || typeof group !== 'object') return out;
@@ -240,6 +272,11 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
   await optional('rates', ['/groups/rates', '/admin/groups/rates', '/rates']);
   await optional('keys', ['/keys', '/admin/keys']);
   await optional('channels', ['/channels/available', '/admin/channels', '/channels']);
+  await optional('paymentCheckout', ['/payment/checkout-info']);
+  if (!results.paymentCheckout) {
+    await optional('paymentConfig', ['/payment/config']);
+    await optional('paymentPlans', ['/payment/plans']);
+  }
 
   const profile = results.profile || {};
   const usage = extractUsage(results.dashboardStats || results.todayStats || {});
@@ -258,6 +295,7 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
   const codexRates = rates.filter((item) => matchesAnyAlias(item, codexAliases));
   const allRateValues = rates.map((item) => item.rate).filter(Number.isFinite);
   const codexRate = codexRates.length ? Math.min(...codexRates.map((item) => item.rate)) : null;
+  const payment = normalizePaymentInfo(results.paymentCheckout, results.paymentConfig, results.paymentPlans);
 
   return {
     token: activeToken,
@@ -268,6 +306,7 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
     keys: keyItems,
     channels: results.channels,
     groups: results.groups,
+    payment,
     errors,
     snapshot: {
       balance: extractBalance(profile),
@@ -285,6 +324,11 @@ async function fetchSub2APIState({ baseUrl, email, password, token, codexAliases
       codex_rate: codexRate,
       min_rate: allRateValues.length ? Math.min(...allRateValues) : null,
       max_rate: allRateValues.length ? Math.max(...allRateValues) : null,
+      payment_enabled: payment.enabled ? 1 : 0,
+      balance_recharge_disabled: payment.balance_recharge_disabled ? 1 : 0,
+      balance_recharge_multiplier: payment.balance_recharge_multiplier,
+      recharge_fee_rate: payment.recharge_fee_rate,
+      payment_plan_count: payment.payment_plan_count,
       group_count: rates.length,
       key_count: keyItems.length,
       channel_count: channelItems.length

@@ -350,6 +350,13 @@ td {
   white-space: nowrap;
 }
 
+.compact-value {
+  display: block;
+  min-width: 116px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .split {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -380,6 +387,18 @@ td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rate-pill .upstream-name {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(13, 107, 95, 0.08);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .rate-pill span {
@@ -443,6 +462,13 @@ td {
   display: block;
   margin-top: 8px;
   font-size: 22px;
+  overflow-wrap: anywhere;
+}
+
+.detail-note {
+  margin: -8px 0 18px;
+  color: var(--muted);
+  font-family: "Trebuchet MS", Verdana, sans-serif;
 }
 
 .capabilities {

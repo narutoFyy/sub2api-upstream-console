@@ -63,6 +63,11 @@ CREATE TABLE IF NOT EXISTS upstream_current_snapshots (
   codex_rate REAL,
   min_rate REAL,
   max_rate REAL,
+  payment_enabled INTEGER NOT NULL DEFAULT 0,
+  balance_recharge_disabled INTEGER NOT NULL DEFAULT 0,
+  balance_recharge_multiplier REAL,
+  recharge_fee_rate REAL,
+  payment_plan_count INTEGER NOT NULL DEFAULT 0,
   group_count INTEGER NOT NULL DEFAULT 0,
   key_count INTEGER NOT NULL DEFAULT 0,
   channel_count INTEGER NOT NULL DEFAULT 0,
@@ -91,6 +96,11 @@ CREATE TABLE IF NOT EXISTS upstream_snapshot_history (
   codex_rate REAL,
   min_rate REAL,
   max_rate REAL,
+  payment_enabled INTEGER NOT NULL DEFAULT 0,
+  balance_recharge_disabled INTEGER NOT NULL DEFAULT 0,
+  balance_recharge_multiplier REAL,
+  recharge_fee_rate REAL,
+  payment_plan_count INTEGER NOT NULL DEFAULT 0,
   group_count INTEGER NOT NULL DEFAULT 0,
   key_count INTEGER NOT NULL DEFAULT 0,
   channel_count INTEGER NOT NULL DEFAULT 0,
@@ -160,6 +170,11 @@ ensureColumn('upstream_current_snapshots', 'month_requests', 'INTEGER NOT NULL D
 ensureColumn('upstream_current_snapshots', 'month_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'month_cost', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'channel_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'payment_enabled', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'balance_recharge_disabled', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_current_snapshots', 'balance_recharge_multiplier', 'REAL');
+ensureColumn('upstream_current_snapshots', 'recharge_fee_rate', 'REAL');
+ensureColumn('upstream_current_snapshots', 'payment_plan_count', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_cost', 'REAL NOT NULL DEFAULT 0');
@@ -167,5 +182,10 @@ ensureColumn('upstream_snapshot_history', 'month_requests', 'INTEGER NOT NULL DE
 ensureColumn('upstream_snapshot_history', 'month_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'month_cost', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'channel_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'payment_enabled', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'balance_recharge_disabled', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'balance_recharge_multiplier', 'REAL');
+ensureColumn('upstream_snapshot_history', 'recharge_fee_rate', 'REAL');
+ensureColumn('upstream_snapshot_history', 'payment_plan_count', 'INTEGER NOT NULL DEFAULT 0');
 
 module.exports = db;

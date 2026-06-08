@@ -121,6 +121,7 @@
                   <th>上游</th>
                   <th>状态</th>
                   <th>余额</th>
+                  <th>充值</th>
                   <th>今日 Token</th>
                   <th>今日成本</th>
                   <th>Codex 倍率</th>
@@ -149,15 +150,12 @@
           <div class="panel-title">
             <div>
               <h2>当前分组倍率</h2>
-              <p>优先展示每个上游最新一次同步到的分组倍率。可筛选 Codex、Claude、GPT、OpenAI、Anthropic。</p>
+              <p>跨上游汇总展示，每张倍率卡片都会标出所属上游。可筛选 OpenAI 和 Anthropic。</p>
             </div>
             <div class="toolbar">
               <input id="rateSearchInput" placeholder="搜索倍率分组" />
               <select id="rateScopeFilter">
                 <option value="">全部倍率</option>
-                <option value="codex">Codex 别名</option>
-                <option value="claude">Claude</option>
-                <option value="gpt">GPT</option>
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
               </select>

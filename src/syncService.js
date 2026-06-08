@@ -2,6 +2,14 @@ const repo = require('./repository');
 const { fetchSub2APIState } = require('./upstreamClient');
 const { nowIso } = require('./utils');
 
+function rechargeSummary(snapshot) {
+  const multiplier = Number(snapshot?.balance_recharge_multiplier);
+  if (!Number.isFinite(multiplier) || Number(snapshot?.balance_recharge_disabled)) {
+    return 'recharge=n/a';
+  }
+  return `recharge=1 RMB->${multiplier} balance`;
+}
+
 async function syncSite(siteId) {
   const site = repo.getSite(siteId);
   if (!site) {
@@ -24,7 +32,7 @@ async function syncSite(siteId) {
       startedAt,
       'success',
       null,
-      `balance=${result.snapshot.balance ?? 'n/a'}, rates=${result.rates.length}, keys=${result.keys.length}, todayTokens=${result.snapshot.today_tokens}`
+      `balance=${result.snapshot.balance ?? 'n/a'}, rates=${result.rates.length}, keys=${result.keys.length}, todayTokens=${result.snapshot.today_tokens}, ${rechargeSummary(result.snapshot)}`
     );
     return result;
   } catch (err) {

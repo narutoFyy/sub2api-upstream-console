@@ -29,6 +29,27 @@ function rateText(value) {
   return `${money.format(Number(value))}x`;
 }
 
+function rechargeText(site) {
+  const multiplier = Number(site?.balance_recharge_multiplier);
+  if (!Number.isFinite(multiplier)) return '不可用';
+  if (Number(site?.balance_recharge_disabled)) return '已关闭';
+  return `1 RMB = ${money.format(multiplier)} 余额`;
+}
+
+function rechargeMetaText(site) {
+  const parts = [];
+  if (Number.isFinite(Number(site?.recharge_fee_rate)) && Number(site.recharge_fee_rate) > 0) {
+    parts.push(`手续费 ${money.format(site.recharge_fee_rate)}%`);
+  }
+  if (Number(site?.payment_plan_count || 0) > 0) {
+    parts.push(`${Number(site.payment_plan_count)} 个套餐`);
+  }
+  if (!Number(site?.payment_enabled) && !Number.isFinite(Number(site?.balance_recharge_multiplier))) {
+    parts.push('上游未开放支付接口');
+  }
+  return parts.join(' · ');
+}
+
 function timeText(value) {
   if (!value) return '从未同步';
   return new Date(value).toLocaleString('zh-CN');
@@ -240,6 +261,10 @@ function renderRows() {
         <td class="${isLowBalanceSite(site) ? 'danger-text' : ''}">
           ${site.balance ?? '不可用'} <small>${escapeHtml(site.balance_currency || '')}</small>
         </td>
+        <td>
+          <strong class="compact-value">${escapeHtml(rechargeText(site))}</strong>
+          ${rechargeMetaText(site) ? `<small>${escapeHtml(rechargeMetaText(site))}</small>` : ''}
+        </td>
         <td>${tokenText(site.today_tokens)}</td>
         <td>${money.format(site.today_cost || 0)}</td>
         <td>${rateText(site.codex_rate)}</td>
@@ -259,7 +284,7 @@ function renderRows() {
       </tr>
     `;
   }).join('');
-  document.querySelector('#upstreamRows').innerHTML = rows || '<tr><td colspan="9" class="empty">还没有匹配的上游。</td></tr>';
+  document.querySelector('#upstreamRows').innerHTML = rows || '<tr><td colspan="10" class="empty">还没有匹配的上游。</td></tr>';
 }
 
 function renderRateChanges(changes) {
@@ -288,9 +313,6 @@ function rateMatchesFilter(rate, detail) {
   const text = `${rate.group_name} ${rate.group_id} ${rate.scope} ${rate.model} ${detail.site.name}`.toLowerCase();
   if (state.filters.rateSearch && !text.includes(state.filters.rateSearch.toLowerCase())) return false;
   if (!state.filters.rateScope) return true;
-  if (state.filters.rateScope === 'codex') {
-    return (detail.site.codex_aliases || ['codex']).some((alias) => text.includes(String(alias).toLowerCase()));
-  }
   return text.includes(state.filters.rateScope.toLowerCase());
 }
 
@@ -308,9 +330,10 @@ function renderRates() {
   }
   document.querySelector('#rateGrid').innerHTML = latest.length ? latest.slice(0, 48).map((rate) => `
     <article class="rate-pill">
+      <small class="upstream-name">${escapeHtml(rate.upstream)}</small>
       <strong>${escapeHtml(rate.group_name || rate.group_id || '未命名分组')}</strong>
       <span>${rateText(rate.rate)}</span>
-      <small>${escapeHtml(rate.upstream)}${rate.model ? ` · ${escapeHtml(rate.model)}` : ''}${rate.scope ? ` · ${escapeHtml(rate.scope)}` : ''}</small>
+      <small>${rate.model ? `${escapeHtml(rate.model)} · ` : ''}${escapeHtml(rate.scope || '未标注平台')}</small>
     </article>
   `).join('') : '<p class="empty">没有匹配的倍率。可以换个筛选条件，或先同步上游。</p>';
 }
@@ -344,7 +367,8 @@ function renderCapabilities(capabilities = {}) {
     ['usage', '用量'],
     ['rates', '倍率'],
     ['keys', 'Key'],
-    ['channels', '渠道']
+    ['channels', '渠道'],
+    ['payment', '充值']
   ];
   return items.map(([key, label]) => `
     <span class="capability ${capabilities[key] ? 'ok' : 'missing'}">${label}：${capabilities[key] ? '支持' : '不可用'}</span>
@@ -358,6 +382,8 @@ function renderDetail(detail) {
   document.querySelector('#detailContent').innerHTML = `
     <div class="detail-grid">
       <article class="metric"><span>余额</span><strong>${snapshot.balance ?? '不可用'}</strong></article>
+      <article class="metric"><span>充值比例</span><strong>${escapeHtml(rechargeText(snapshot))}</strong></article>
+      <article class="metric"><span>支付套餐</span><strong>${Number(snapshot.payment_plan_count || 0)}</strong></article>
       <article class="metric"><span>总 Token</span><strong>${tokenText(snapshot.total_tokens)}</strong></article>
       <article class="metric"><span>今日 Token</span><strong>${tokenText(snapshot.today_tokens)}</strong></article>
       <article class="metric"><span>近 7 天 Token</span><strong>${tokenText(snapshot.week_tokens)}</strong></article>
@@ -369,6 +395,7 @@ function renderDetail(detail) {
       <article class="metric"><span>渠道数量</span><strong>${snapshot.channel_count || 0}</strong></article>
       <article class="metric"><span>倍率范围</span><strong>${rateText(snapshot.min_rate)} - ${rateText(snapshot.max_rate)}</strong></article>
     </div>
+    ${rechargeMetaText(snapshot) ? `<p class="detail-note">${escapeHtml(rechargeMetaText(snapshot))}</p>` : ''}
     <h3>接口能力矩阵</h3>
     <div class="capabilities">${renderCapabilities(detail.capabilities)}</div>
     <h3>余额 / 用量趋势</h3>
@@ -516,7 +543,7 @@ document.querySelector('#testConnectionBtn').addEventListener('click', async (ev
     const payload = getFormPayload();
     delete payload.id;
     const result = await api('/api/upstreams/test', { method: 'POST', body: JSON.stringify(payload) });
-    showMessage(`连接成功：余额 ${result.snapshot.balance ?? '不可用'}，倍率 ${result.rates_count} 个，Key ${result.keys_count} 个。`, 'success');
+    showMessage(`连接成功：余额 ${result.snapshot.balance ?? '不可用'}，充值 ${rechargeText(result.snapshot)}，倍率 ${result.rates_count} 个，Key ${result.keys_count} 个。`, 'success');
   });
 });
 
