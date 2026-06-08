@@ -7,6 +7,7 @@
   --accent: #0d6b5f;
   --accent-2: #dc7b2f;
   --danger: #b73535;
+  --number-font: "Times New Roman", Times, "Noto Serif SC", serif;
   --shadow: 0 24px 80px rgba(74, 51, 24, 0.16);
 }
 
@@ -191,6 +192,22 @@ button:disabled { cursor: wait; opacity: 0.65; transform: none; }
 .panel {
   margin-bottom: 16px;
   padding: 22px;
+}
+
+.card strong,
+input[type="number"],
+td:nth-child(3),
+td:nth-child(4),
+td:nth-child(5),
+td:nth-child(6),
+td:nth-child(7),
+td:nth-child(8),
+td:nth-child(9),
+.compact-value,
+.rate-pill span,
+.metric strong {
+  font-family: var(--number-font);
+  font-variant-numeric: tabular-nums;
 }
 
 .import-panel {
