@@ -412,6 +412,52 @@ function normalizeNewAPIUsage(self, totalStat, todayStat, weekStat, monthStat, q
   };
 }
 
+function normalizeNewAPISubscription(subscriptionPayload, plansPayload, quotaUnit) {
+  const activeItems = Array.isArray(subscriptionPayload?.subscriptions) ? subscriptionPayload.subscriptions : [];
+  const allItems = Array.isArray(subscriptionPayload?.all_subscriptions) ? subscriptionPayload.all_subscriptions : activeItems;
+  const plans = Array.isArray(plansPayload) ? plansPayload : [];
+  const planMap = new Map();
+  for (const item of plans) {
+    const plan = item?.plan || item;
+    if (plan?.id !== undefined) planMap.set(Number(plan.id), plan);
+  }
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const subscriptions = activeItems.map((item) => {
+    const sub = item?.subscription || item || {};
+    const plan = planMap.get(Number(sub.plan_id)) || {};
+    const total = convertNewAPIQuota(sub.amount_total, quotaUnit);
+    const used = convertNewAPIQuota(sub.amount_used, quotaUnit);
+    const remaining = total === null || used === null ? null : Math.max(total - used, 0);
+    const usagePercent = total && used !== null ? Math.min(Math.max((used / total) * 100, 0), 100) : null;
+    const daysRemaining = sub.end_time ? Math.max(Math.ceil((Number(sub.end_time) - nowSeconds) / 86400), 0) : null;
+    return {
+      id: sub.id ?? null,
+      plan_id: sub.plan_id ?? null,
+      plan_title: plan.title || '',
+      status: sub.status || '',
+      source: sub.source || '',
+      billing_preference: subscriptionPayload?.billing_preference || '',
+      amount_total: total,
+      amount_used: used,
+      amount_remaining: remaining,
+      usage_percent: usagePercent,
+      start_time: sub.start_time || null,
+      end_time: sub.end_time || null,
+      days_remaining: daysRemaining,
+      raw: sub
+    };
+  });
+  const primary = subscriptions[0] || null;
+  return {
+    enabled: subscriptions.length > 0 || allItems.length > 0,
+    billing_preference: subscriptionPayload?.billing_preference || '',
+    active_count: subscriptions.length,
+    total_count: allItems.length,
+    primary,
+    subscriptions
+  };
+}
+
 async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases }) {
   if (token && (!email || !password)) {
     throw new Error('New API user data requires account/password login because user endpoints require a session and New-Api-User header');
@@ -439,6 +485,8 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
   await optional('weekStats', buildNewAPIStatPath(7));
   await optional('monthStats', buildNewAPIStatPath(30));
   await optional('status', '/status');
+  await optional('subscriptionSelf', '/subscription/self');
+  await optional('subscriptionPlans', '/subscription/plans');
   await optional('ratioConfig', '/ratio_config', { cookie: '', headers: {} });
 
   const profile = results.profile || login.user || {};
@@ -449,6 +497,7 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
   const codexRate = codexRates.length ? Math.min(...codexRates.map((item) => item.rate)) : null;
   const keyItems = normalizeNewAPITokens(results.keys);
   const usage = normalizeNewAPIUsage(profile, results.totalStats, results.todayStats, results.weekStats, results.monthStats, quotaUnit);
+  const subscription = normalizeNewAPISubscription(results.subscriptionSelf, results.subscriptionPlans, quotaUnit);
   const payment = {
     enabled: false,
     balance_recharge_disabled: true,
@@ -475,6 +524,7 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
     channels: null,
     groups: results.groups,
     payment,
+    subscription,
     errors,
     snapshot: {
       balance: convertNewAPIQuota(profile?.quota, quotaUnit),
@@ -503,6 +553,7 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
       recharge_fee_rate: null,
       payment_plan_count: 0,
       payment_methods: '[]',
+      subscription_summary: JSON.stringify(subscription),
       group_count: rates.length,
       key_count: keyItems.length,
       channel_count: 0
@@ -575,6 +626,7 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
   const allRateValues = rates.map((item) => item.rate).filter(Number.isFinite);
   const codexRate = codexRates.length ? Math.min(...codexRates.map((item) => item.rate)) : null;
   const payment = normalizePaymentInfo(results.paymentCheckout, results.paymentConfig, results.paymentPlans);
+  const subscription = { enabled: false, billing_preference: '', active_count: 0, total_count: 0, primary: null, subscriptions: [] };
 
   return {
     token: activeToken,
@@ -586,6 +638,7 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
     channels: results.channels,
     groups: results.groups,
     payment,
+    subscription,
     errors,
     snapshot: {
       balance: extractBalance(profile),
@@ -609,6 +662,7 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
       recharge_fee_rate: payment.recharge_fee_rate,
       payment_plan_count: payment.payment_plan_count,
       payment_methods: JSON.stringify(payment.methods || []),
+      subscription_summary: JSON.stringify(subscription),
       group_count: rates.length,
       key_count: keyItems.length,
       channel_count: channelItems.length

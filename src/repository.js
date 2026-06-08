@@ -6,16 +6,23 @@ const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
 function rowToSite(row) {
   if (!row) return null;
   let paymentMethods = [];
+  let subscriptionSummary = {};
   try {
     paymentMethods = JSON.parse(row.payment_methods || '[]');
   } catch {
     paymentMethods = [];
   }
+  try {
+    subscriptionSummary = JSON.parse(row.subscription_summary || '{}');
+  } catch {
+    subscriptionSummary = {};
+  }
   return {
     ...row,
     tags: JSON.parse(row.tags || '[]'),
     codex_aliases: JSON.parse(row.codex_aliases || '["codex"]'),
-    payment_methods: paymentMethods
+    payment_methods: paymentMethods,
+    subscription_summary: subscriptionSummary
   };
 }
 
@@ -27,6 +34,7 @@ function listSites() {
            c.codex_rate, c.min_rate, c.max_rate,
            c.payment_enabled, c.balance_recharge_disabled, c.balance_recharge_multiplier,
            c.recharge_fee_rate, c.payment_plan_count, c.payment_methods,
+           c.subscription_summary,
            c.group_count, c.key_count, c.channel_count
     FROM upstream_sites s
     LEFT JOIN upstream_current_snapshots c ON c.upstream_site_id = s.id
@@ -176,14 +184,14 @@ function saveSyncSuccess(siteId, result) {
         week_requests, week_tokens, week_cost, month_requests, month_tokens, month_cost,
         codex_rate, min_rate, max_rate, payment_enabled, balance_recharge_disabled,
         balance_recharge_multiplier, recharge_fee_rate, payment_plan_count, payment_methods,
-        group_count, key_count, channel_count, raw_payload, captured_at
+        subscription_summary, group_count, key_count, channel_count, raw_payload, captured_at
       ) VALUES (
         @siteId, @balance, @balance_currency, @username, @email, @role,
         @total_requests, @today_requests, @total_tokens, @today_tokens, @total_cost, @today_cost,
         @week_requests, @week_tokens, @week_cost, @month_requests, @month_tokens, @month_cost,
         @codex_rate, @min_rate, @max_rate, @payment_enabled, @balance_recharge_disabled,
         @balance_recharge_multiplier, @recharge_fee_rate, @payment_plan_count, @payment_methods,
-        @group_count, @key_count, @channel_count, @raw_payload, @now
+        @subscription_summary, @group_count, @key_count, @channel_count, @raw_payload, @now
       )
       ON CONFLICT(upstream_site_id) DO UPDATE SET
         balance=@balance, balance_currency=@balance_currency, username=@username, email=@email, role=@role,
@@ -195,12 +203,13 @@ function saveSyncSuccess(siteId, result) {
         payment_enabled=@payment_enabled, balance_recharge_disabled=@balance_recharge_disabled,
         balance_recharge_multiplier=@balance_recharge_multiplier, recharge_fee_rate=@recharge_fee_rate,
         payment_plan_count=@payment_plan_count, payment_methods=@payment_methods,
+        subscription_summary=@subscription_summary,
         channel_count=@channel_count,
         raw_payload=@raw_payload, captured_at=@now
     `).run({
       siteId,
       ...snapshot,
-      raw_payload: safeJson({ profile: result.profile, usage: result.usage, payment: result.payment, errors: result.errors }),
+      raw_payload: safeJson({ profile: result.profile, usage: result.usage, payment: result.payment, subscription: result.subscription, errors: result.errors }),
       now
     });
 
@@ -364,6 +373,12 @@ function listSyncLogs(siteId = null, limit = 100) {
 
 function capabilityMatrix(siteId) {
   const snapshot = getSnapshot(siteId);
+  let subscriptionSummary = {};
+  try {
+    subscriptionSummary = JSON.parse(snapshot?.subscription_summary || '{}');
+  } catch {
+    subscriptionSummary = {};
+  }
   const rates = listRates(siteId, 1);
   const logs = listSyncLogs(siteId, 20);
   const latestLog = logs[0];
@@ -375,6 +390,7 @@ function capabilityMatrix(siteId) {
     keys: Number(snapshot?.key_count || 0) > 0,
     channels: Number(snapshot?.channel_count || 0) > 0,
     payment: Boolean(snapshot && Number(snapshot.payment_enabled) && !Number(snapshot.balance_recharge_disabled)),
+    subscription: Boolean(subscriptionSummary?.enabled && subscriptionSummary?.active_count),
     errors: latestLog?.status === 'failed' ? [latestLog.error_message] : []
   };
 }

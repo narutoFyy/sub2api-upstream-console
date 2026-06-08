@@ -67,6 +67,13 @@ function withoutRawPayload(row) {
       safeRow.payment_methods = [];
     }
   }
+  if (typeof safeRow.subscription_summary === 'string') {
+    try {
+      safeRow.subscription_summary = JSON.parse(safeRow.subscription_summary || '{}');
+    } catch {
+      safeRow.subscription_summary = {};
+    }
+  }
   return safeRow;
 }
 

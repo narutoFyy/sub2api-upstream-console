@@ -420,6 +420,7 @@ function renderCapabilities(capabilities = {}) {
     ['rates', '倍率'],
     ['keys', 'Key'],
     ['channels', '渠道'],
+    ['subscription', 'Subscription'],
     ['payment', '充值']
   ];
   return items.map(([key, label]) => `
@@ -479,6 +480,54 @@ function renderRechargeOrder(order) {
   `;
 }
 
+function parseSubscriptionSummary(snapshot) {
+  const raw = snapshot?.subscription_summary;
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function dateTimeFromSeconds(seconds) {
+  const n = Number(seconds);
+  if (!Number.isFinite(n) || n <= 0) return 'n/a';
+  return new Date(n * 1000).toLocaleString();
+}
+
+function renderSubscriptionPanel(snapshot) {
+  const summary = parseSubscriptionSummary(snapshot);
+  if (!summary.enabled || !summary.primary) {
+    return `
+      <h3>Subscription</h3>
+      <p class="empty">No active subscription.</p>
+    `;
+  }
+  const sub = summary.primary;
+  const planName = sub.plan_title || `Plan #${sub.plan_id || 'n/a'}`;
+  const used = Number(sub.amount_used || 0);
+  const total = Number(sub.amount_total || 0);
+  const remaining = Number(sub.amount_remaining || 0);
+  const percent = Number.isFinite(Number(sub.usage_percent)) ? Number(sub.usage_percent) : 0;
+  return `
+    <h3>Subscription</h3>
+    <div class="detail-grid">
+      <article class="metric"><span>Plan</span><strong>${escapeHtml(planName)}</strong></article>
+      <article class="metric"><span>Subscription ID</span><strong>#${escapeHtml(sub.id || 'n/a')}</strong></article>
+      <article class="metric"><span>Status</span><strong>${escapeHtml(sub.status || 'unknown')}</strong></article>
+      <article class="metric"><span>Billing</span><strong>${escapeHtml(summary.billing_preference || 'unknown')}</strong></article>
+      <article class="metric"><span>Remaining Days</span><strong>${sub.days_remaining ?? 'n/a'}</strong></article>
+      <article class="metric"><span>Expires At</span><strong>${escapeHtml(dateTimeFromSeconds(sub.end_time))}</strong></article>
+      <article class="metric"><span>Total Quota</span><strong>${money.format(total)}</strong></article>
+      <article class="metric"><span>Used Quota</span><strong>${money.format(used)}</strong></article>
+      <article class="metric"><span>Remaining Quota</span><strong>${money.format(remaining)}</strong></article>
+      <article class="metric"><span>Used Percent</span><strong>${money.format(percent)}%</strong></article>
+    </div>
+  `;
+}
+
 function renderDetail(detail) {
   const snapshot = detail.snapshot || {};
   document.querySelector('#detailTitle').textContent = `上游详情：${detail.site.name}`;
@@ -502,6 +551,7 @@ function renderDetail(detail) {
     ${rechargeMetaText(snapshot) ? `<p class="detail-note">${escapeHtml(rechargeMetaText(snapshot))}</p>` : ''}
     <h3>接口能力矩阵</h3>
     <div class="capabilities">${renderCapabilities(detail.capabilities)}</div>
+    ${renderSubscriptionPanel(snapshot)}
     ${renderRechargePanel(detail)}
     <h3>余额 / 用量趋势</h3>
     ${trendSvg(detail.history || [])}
