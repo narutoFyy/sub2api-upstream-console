@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS upstream_current_snapshots (
   payment_plan_count INTEGER NOT NULL DEFAULT 0,
   payment_methods TEXT NOT NULL DEFAULT '[]',
   subscription_summary TEXT NOT NULL DEFAULT '{}',
+  pricing_summary TEXT NOT NULL DEFAULT '{}',
   group_count INTEGER NOT NULL DEFAULT 0,
   key_count INTEGER NOT NULL DEFAULT 0,
   channel_count INTEGER NOT NULL DEFAULT 0,
@@ -128,6 +129,48 @@ CREATE TABLE IF NOT EXISTS group_rate_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_group_rate_snapshots_site_time ON group_rate_snapshots(upstream_site_id, captured_at);
+
+CREATE TABLE IF NOT EXISTS model_pricing_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upstream_site_id INTEGER NOT NULL,
+  model_name TEXT NOT NULL DEFAULT '',
+  vendor TEXT NOT NULL DEFAULT '',
+  vendor_id INTEGER,
+  tags TEXT NOT NULL DEFAULT '',
+  quota_type INTEGER NOT NULL DEFAULT 0,
+  model_ratio REAL,
+  model_price REAL,
+  completion_ratio REAL,
+  cache_ratio REAL,
+  create_cache_ratio REAL,
+  image_ratio REAL,
+  audio_ratio REAL,
+  audio_completion_ratio REAL,
+  billing_mode TEXT NOT NULL DEFAULT '',
+  billing_expr TEXT NOT NULL DEFAULT '',
+  enable_groups TEXT NOT NULL DEFAULT '[]',
+  supported_endpoint_types TEXT NOT NULL DEFAULT '[]',
+  effective_group TEXT NOT NULL DEFAULT '',
+  effective_group_ratio REAL,
+  official_input_usd_per_1m REAL,
+  official_output_usd_per_1m REAL,
+  official_cache_read_usd_per_1m REAL,
+  official_cache_write_usd_per_1m REAL,
+  official_request_usd REAL,
+  upstream_input_usd_per_1m REAL,
+  upstream_output_usd_per_1m REAL,
+  upstream_cache_read_usd_per_1m REAL,
+  upstream_cache_write_usd_per_1m REAL,
+  upstream_request_usd REAL,
+  pricing_version TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'pricing',
+  raw_payload TEXT NOT NULL DEFAULT '{}',
+  captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_pricing_snapshots_site_time ON model_pricing_snapshots(upstream_site_id, captured_at);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_snapshots_model ON model_pricing_snapshots(model_name);
 
 CREATE TABLE IF NOT EXISTS rate_change_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,6 +248,7 @@ ensureColumn('upstream_current_snapshots', 'recharge_fee_rate', 'REAL');
 ensureColumn('upstream_current_snapshots', 'payment_plan_count', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'payment_methods', `TEXT NOT NULL DEFAULT '[]'`);
 ensureColumn('upstream_current_snapshots', 'subscription_summary', `TEXT NOT NULL DEFAULT '{}'`);
+ensureColumn('upstream_current_snapshots', 'pricing_summary', `TEXT NOT NULL DEFAULT '{}'`);
 ensureColumn('upstream_snapshot_history', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_cost', 'REAL NOT NULL DEFAULT 0');
@@ -218,5 +262,17 @@ ensureColumn('upstream_snapshot_history', 'balance_recharge_multiplier', 'REAL')
 ensureColumn('upstream_snapshot_history', 'recharge_fee_rate', 'REAL');
 ensureColumn('upstream_snapshot_history', 'payment_plan_count', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'payment_methods', `TEXT NOT NULL DEFAULT '[]'`);
+ensureColumn('model_pricing_snapshots', 'effective_group', `TEXT NOT NULL DEFAULT ''`);
+ensureColumn('model_pricing_snapshots', 'effective_group_ratio', 'REAL');
+ensureColumn('model_pricing_snapshots', 'official_input_usd_per_1m', 'REAL');
+ensureColumn('model_pricing_snapshots', 'official_output_usd_per_1m', 'REAL');
+ensureColumn('model_pricing_snapshots', 'official_cache_read_usd_per_1m', 'REAL');
+ensureColumn('model_pricing_snapshots', 'official_cache_write_usd_per_1m', 'REAL');
+ensureColumn('model_pricing_snapshots', 'official_request_usd', 'REAL');
+ensureColumn('model_pricing_snapshots', 'upstream_input_usd_per_1m', 'REAL');
+ensureColumn('model_pricing_snapshots', 'upstream_output_usd_per_1m', 'REAL');
+ensureColumn('model_pricing_snapshots', 'upstream_cache_read_usd_per_1m', 'REAL');
+ensureColumn('model_pricing_snapshots', 'upstream_cache_write_usd_per_1m', 'REAL');
+ensureColumn('model_pricing_snapshots', 'upstream_request_usd', 'REAL');
 
 module.exports = db;

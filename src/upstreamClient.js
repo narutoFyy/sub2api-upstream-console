@@ -412,17 +412,53 @@ function normalizeNewAPIUsage(self, totalStat, todayStat, weekStat, monthStat, q
   };
 }
 
+function arrayFromMaybe(value) {
+  if (Array.isArray(value)) return value;
+  if (value && Array.isArray(value.data)) return value.data;
+  if (value && Array.isArray(value.items)) return value.items;
+  if (value && Array.isArray(value.records)) return value.records;
+  if (value && Array.isArray(value.list)) return value.list;
+  return [];
+}
+
+function uniqueSubscriptions(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const sub = item?.subscription || item || {};
+    const key = sub.id !== undefined && sub.id !== null
+      ? `id:${sub.id}`
+      : JSON.stringify([sub.plan_id, sub.start_time, sub.end_time, sub.status]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function isActiveNewAPISubscription(item, nowSeconds) {
+  const sub = item?.subscription || item || {};
+  if (!sub || typeof sub !== 'object') return false;
+  if (sub.status && sub.status !== 'active') return false;
+  if (sub.end_time && Number(sub.end_time) > 0 && Number(sub.end_time) <= nowSeconds) return false;
+  return true;
+}
+
 function normalizeNewAPISubscription(subscriptionPayload, plansPayload, quotaUnit) {
-  const activeItems = Array.isArray(subscriptionPayload?.subscriptions) ? subscriptionPayload.subscriptions : [];
-  const allItems = Array.isArray(subscriptionPayload?.all_subscriptions) ? subscriptionPayload.all_subscriptions : activeItems;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const activeItems = uniqueSubscriptions(arrayFromMaybe(subscriptionPayload?.subscriptions));
+  const explicitAllItems = uniqueSubscriptions(arrayFromMaybe(subscriptionPayload?.all_subscriptions));
+  const allItems = explicitAllItems.length ? explicitAllItems : activeItems;
+  const normalizedActiveItems = activeItems.length
+    ? activeItems
+    : allItems.filter((item) => isActiveNewAPISubscription(item, nowSeconds));
   const plans = Array.isArray(plansPayload) ? plansPayload : [];
   const planMap = new Map();
   for (const item of plans) {
     const plan = item?.plan || item;
     if (plan?.id !== undefined) planMap.set(Number(plan.id), plan);
   }
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const subscriptions = activeItems.map((item) => {
+  const subscriptions = normalizedActiveItems.map((item) => {
     const sub = item?.subscription || item || {};
     const plan = planMap.get(Number(sub.plan_id)) || {};
     const total = convertNewAPIQuota(sub.amount_total, quotaUnit);
@@ -444,6 +480,7 @@ function normalizeNewAPISubscription(subscriptionPayload, plansPayload, quotaUni
       start_time: sub.start_time || null,
       end_time: sub.end_time || null,
       days_remaining: daysRemaining,
+      next_reset_time: sub.next_reset_time || null,
       raw: sub
     };
   });
@@ -455,6 +492,89 @@ function normalizeNewAPISubscription(subscriptionPayload, plansPayload, quotaUni
     total_count: allItems.length,
     primary,
     subscriptions
+  };
+}
+
+function normalizeEndpointTypes(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === 'object') return Object.keys(value);
+  return [String(value)].filter(Boolean);
+}
+
+function normalizeNewAPIPricing(pricingPayload, ratioConfigPayload = null, codexAliases = []) {
+  const pricingItems = arrayFromMaybe(pricingPayload);
+  const pricingOuter = pricingPayload?.payload || pricingPayload || {};
+  const ratioConfig = ratioConfigPayload && typeof ratioConfigPayload === 'object' ? ratioConfigPayload : {};
+  const vendors = Array.isArray(ratioConfig?.vendors) ? ratioConfig.vendors : Array.isArray(ratioConfig?.vendor) ? ratioConfig.vendor : [];
+  const vendorMap = new Map();
+  if (Array.isArray(pricingOuter?.vendors)) {
+    for (const vendor of pricingOuter.vendors) vendorMap.set(Number(vendor.id), vendor.name || '');
+  }
+  for (const vendor of vendors) vendorMap.set(Number(vendor.id), vendor.name || '');
+
+  const sourceItems = pricingItems.length
+    ? pricingItems
+    : Object.entries(ratioConfig.model_ratio || ratioConfig.modelRatio || {}).map(([model, ratio]) => ({
+      model_name: model,
+      model_ratio: ratio,
+      completion_ratio: ratioConfig.completion_ratio?.[model] ?? ratioConfig.completionRatio?.[model] ?? null,
+      cache_ratio: ratioConfig.cache_ratio?.[model] ?? ratioConfig.cacheRatio?.[model] ?? null,
+      create_cache_ratio: ratioConfig.create_cache_ratio?.[model] ?? ratioConfig.createCacheRatio?.[model] ?? null,
+      model_price: ratioConfig.model_price?.[model] ?? ratioConfig.modelPrice?.[model] ?? null,
+      quota_type: ratioConfig.model_price?.[model] || ratioConfig.modelPrice?.[model] ? 1 : 0
+    }));
+
+  const items = sourceItems.map((item) => ({
+    model_name: item.model_name || item.model || item.name || '',
+    vendor: item.vendor || vendorMap.get(Number(item.vendor_id)) || '',
+    vendor_id: item.vendor_id ?? null,
+    tags: item.tags || '',
+    quota_type: Number(item.quota_type || 0),
+    model_ratio: pickFirstNumber(item.model_ratio, item.modelRatio),
+    model_price: pickFirstNumber(item.model_price, item.modelPrice),
+    completion_ratio: pickFirstNumber(item.completion_ratio, item.completionRatio),
+    cache_ratio: pickFirstNumber(item.cache_ratio, item.cacheRatio),
+    create_cache_ratio: pickFirstNumber(item.create_cache_ratio, item.createCacheRatio),
+    image_ratio: pickFirstNumber(item.image_ratio, item.imageRatio),
+    audio_ratio: pickFirstNumber(item.audio_ratio, item.audioRatio),
+    audio_completion_ratio: pickFirstNumber(item.audio_completion_ratio, item.audioCompletionRatio),
+    billing_mode: item.billing_mode || item.billingMode || '',
+    billing_expr: item.billing_expr || item.billingExpr || '',
+    enable_groups: arrayFromMaybe(item.enable_groups || item.enableGroups),
+    supported_endpoint_types: normalizeEndpointTypes(item.supported_endpoint_types || item.supportedEndpointTypes),
+    pricing_version: item.pricing_version || '',
+    source: pricingItems.length ? 'pricing' : 'ratio_config',
+    raw: item
+  })).filter((item) => item.model_name);
+
+  const ratioValues = items
+    .map((item) => item.quota_type === 1 ? item.model_price : item.model_ratio)
+    .filter(Number.isFinite);
+  const aliases = normalizeAliases(codexAliases);
+  const codexItems = items.filter((item) => {
+    const text = `${item.model_name} ${item.vendor} ${item.tags}`.toLowerCase();
+    return aliases.some((alias) => text.includes(String(alias).toLowerCase()));
+  });
+  const vendorNames = new Set(items.map((item) => item.vendor).filter(Boolean));
+  const pricingVersion = pricingOuter?.pricing_version || pricingItems.find((item) => item.pricing_version)?.pricing_version || '';
+  const groupRatio = pricingOuter?.group_ratio && typeof pricingOuter.group_ratio === 'object' ? pricingOuter.group_ratio : {};
+  return {
+    summary: {
+      enabled: items.length > 0,
+      source: pricingItems.length ? 'pricing' : (items.length ? 'ratio_config' : ''),
+      model_count: items.length,
+      vendor_count: vendorNames.size,
+      min_model_rate: ratioValues.length ? Math.min(...ratioValues) : null,
+      max_model_rate: ratioValues.length ? Math.max(...ratioValues) : null,
+      codex_model_count: codexItems.length,
+      codex_min_rate: codexItems.length
+        ? Math.min(...codexItems.map((item) => item.quota_type === 1 ? item.model_price : item.model_ratio).filter(Number.isFinite))
+        : null,
+      pricing_version: pricingVersion,
+      group_ratio: groupRatio
+    },
+    items
   };
 }
 
@@ -487,6 +607,7 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
   await optional('status', '/status');
   await optional('subscriptionSelf', '/subscription/self');
   await optional('subscriptionPlans', '/subscription/plans');
+  await optional('pricing', '/pricing', { withMeta: true });
   await optional('ratioConfig', '/ratio_config', { cookie: '', headers: {} });
 
   const profile = results.profile || login.user || {};
@@ -498,6 +619,7 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
   const keyItems = normalizeNewAPITokens(results.keys);
   const usage = normalizeNewAPIUsage(profile, results.totalStats, results.todayStats, results.weekStats, results.monthStats, quotaUnit);
   const subscription = normalizeNewAPISubscription(results.subscriptionSelf, results.subscriptionPlans, quotaUnit);
+  const pricing = normalizeNewAPIPricing(results.pricing, results.ratioConfig, codexAliases);
   const payment = {
     enabled: false,
     balance_recharge_disabled: true,
@@ -525,6 +647,8 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
     groups: results.groups,
     payment,
     subscription,
+    pricing: pricing.summary,
+    model_pricing: pricing.items,
     errors,
     snapshot: {
       balance: convertNewAPIQuota(profile?.quota, quotaUnit),
@@ -554,6 +678,7 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
       payment_plan_count: 0,
       payment_methods: '[]',
       subscription_summary: JSON.stringify(subscription),
+      pricing_summary: JSON.stringify(pricing.summary),
       group_count: rates.length,
       key_count: keyItems.length,
       channel_count: 0
@@ -627,6 +752,7 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
   const codexRate = codexRates.length ? Math.min(...codexRates.map((item) => item.rate)) : null;
   const payment = normalizePaymentInfo(results.paymentCheckout, results.paymentConfig, results.paymentPlans);
   const subscription = { enabled: false, billing_preference: '', active_count: 0, total_count: 0, primary: null, subscriptions: [] };
+  const pricing = { summary: { enabled: false, source: '', model_count: 0, vendor_count: 0, min_model_rate: null, max_model_rate: null, codex_model_count: 0, codex_min_rate: null, pricing_version: '' }, items: [] };
 
   return {
     token: activeToken,
@@ -639,6 +765,8 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
     groups: results.groups,
     payment,
     subscription,
+    pricing: pricing.summary,
+    model_pricing: pricing.items,
     errors,
     snapshot: {
       balance: extractBalance(profile),
@@ -663,6 +791,7 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
       payment_plan_count: payment.payment_plan_count,
       payment_methods: JSON.stringify(payment.methods || []),
       subscription_summary: JSON.stringify(subscription),
+      pricing_summary: JSON.stringify(pricing.summary),
       group_count: rates.length,
       key_count: keyItems.length,
       channel_count: channelItems.length

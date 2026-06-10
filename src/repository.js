@@ -2,11 +2,13 @@ const db = require('./db');
 const { encryptSecret, decryptSecret, maskSecret } = require('./crypto');
 const config = require('./config');
 const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
+const { calculatePricingFields, groupModelPricingBoard } = require('./modelPricing');
 
 function rowToSite(row) {
   if (!row) return null;
   let paymentMethods = [];
   let subscriptionSummary = {};
+  let pricingSummary = {};
   try {
     paymentMethods = JSON.parse(row.payment_methods || '[]');
   } catch {
@@ -17,12 +19,18 @@ function rowToSite(row) {
   } catch {
     subscriptionSummary = {};
   }
+  try {
+    pricingSummary = JSON.parse(row.pricing_summary || '{}');
+  } catch {
+    pricingSummary = {};
+  }
   return {
     ...row,
     tags: JSON.parse(row.tags || '[]'),
     codex_aliases: JSON.parse(row.codex_aliases || '["codex"]'),
     payment_methods: paymentMethods,
-    subscription_summary: subscriptionSummary
+    subscription_summary: subscriptionSummary,
+    pricing_summary: pricingSummary
   };
 }
 
@@ -34,7 +42,7 @@ function listSites() {
            c.codex_rate, c.min_rate, c.max_rate,
            c.payment_enabled, c.balance_recharge_disabled, c.balance_recharge_multiplier,
            c.recharge_fee_rate, c.payment_plan_count, c.payment_methods,
-           c.subscription_summary,
+           c.subscription_summary, c.pricing_summary,
            c.group_count, c.key_count, c.channel_count
     FROM upstream_sites s
     LEFT JOIN upstream_current_snapshots c ON c.upstream_site_id = s.id
@@ -184,14 +192,14 @@ function saveSyncSuccess(siteId, result) {
         week_requests, week_tokens, week_cost, month_requests, month_tokens, month_cost,
         codex_rate, min_rate, max_rate, payment_enabled, balance_recharge_disabled,
         balance_recharge_multiplier, recharge_fee_rate, payment_plan_count, payment_methods,
-        subscription_summary, group_count, key_count, channel_count, raw_payload, captured_at
+        subscription_summary, pricing_summary, group_count, key_count, channel_count, raw_payload, captured_at
       ) VALUES (
         @siteId, @balance, @balance_currency, @username, @email, @role,
         @total_requests, @today_requests, @total_tokens, @today_tokens, @total_cost, @today_cost,
         @week_requests, @week_tokens, @week_cost, @month_requests, @month_tokens, @month_cost,
         @codex_rate, @min_rate, @max_rate, @payment_enabled, @balance_recharge_disabled,
         @balance_recharge_multiplier, @recharge_fee_rate, @payment_plan_count, @payment_methods,
-        @subscription_summary, @group_count, @key_count, @channel_count, @raw_payload, @now
+        @subscription_summary, @pricing_summary, @group_count, @key_count, @channel_count, @raw_payload, @now
       )
       ON CONFLICT(upstream_site_id) DO UPDATE SET
         balance=@balance, balance_currency=@balance_currency, username=@username, email=@email, role=@role,
@@ -204,12 +212,13 @@ function saveSyncSuccess(siteId, result) {
         balance_recharge_multiplier=@balance_recharge_multiplier, recharge_fee_rate=@recharge_fee_rate,
         payment_plan_count=@payment_plan_count, payment_methods=@payment_methods,
         subscription_summary=@subscription_summary,
+        pricing_summary=@pricing_summary,
         channel_count=@channel_count,
         raw_payload=@raw_payload, captured_at=@now
     `).run({
       siteId,
       ...snapshot,
-      raw_payload: safeJson({ profile: result.profile, usage: result.usage, payment: result.payment, subscription: result.subscription, errors: result.errors }),
+      raw_payload: safeJson({ profile: result.profile, usage: result.usage, payment: result.payment, subscription: result.subscription, pricing: result.pricing, errors: result.errors }),
       now
     });
 
@@ -253,6 +262,59 @@ function saveSyncSuccess(siteId, result) {
       }
     }
 
+    if (Array.isArray(result.model_pricing)) {
+      for (const item of result.model_pricing) {
+        const priceFields = calculatePricingFields(item, result.pricing?.group_ratio || {});
+        db.prepare(`
+          INSERT INTO model_pricing_snapshots (
+            upstream_site_id, model_name, vendor, vendor_id, tags, quota_type,
+            model_ratio, model_price, completion_ratio, cache_ratio, create_cache_ratio,
+            image_ratio, audio_ratio, audio_completion_ratio, billing_mode, billing_expr,
+            enable_groups, supported_endpoint_types, effective_group, effective_group_ratio,
+            official_input_usd_per_1m, official_output_usd_per_1m,
+            official_cache_read_usd_per_1m, official_cache_write_usd_per_1m, official_request_usd,
+            upstream_input_usd_per_1m, upstream_output_usd_per_1m,
+            upstream_cache_read_usd_per_1m, upstream_cache_write_usd_per_1m, upstream_request_usd,
+            pricing_version, source, raw_payload, captured_at
+          ) VALUES (
+            @siteId, @model_name, @vendor, @vendor_id, @tags, @quota_type,
+            @model_ratio, @model_price, @completion_ratio, @cache_ratio, @create_cache_ratio,
+            @image_ratio, @audio_ratio, @audio_completion_ratio, @billing_mode, @billing_expr,
+            @enable_groups, @supported_endpoint_types, @effective_group, @effective_group_ratio,
+            @official_input_usd_per_1m, @official_output_usd_per_1m,
+            @official_cache_read_usd_per_1m, @official_cache_write_usd_per_1m, @official_request_usd,
+            @upstream_input_usd_per_1m, @upstream_output_usd_per_1m,
+            @upstream_cache_read_usd_per_1m, @upstream_cache_write_usd_per_1m, @upstream_request_usd,
+            @pricing_version, @source, @raw_payload, @now
+          )
+        `).run({
+          siteId,
+          model_name: item.model_name || '',
+          vendor: item.vendor || '',
+          vendor_id: item.vendor_id ?? null,
+          tags: item.tags || '',
+          quota_type: Number(item.quota_type || 0),
+          model_ratio: item.model_ratio ?? null,
+          model_price: item.model_price ?? null,
+          completion_ratio: item.completion_ratio ?? null,
+          cache_ratio: item.cache_ratio ?? null,
+          create_cache_ratio: item.create_cache_ratio ?? null,
+          image_ratio: item.image_ratio ?? null,
+          audio_ratio: item.audio_ratio ?? null,
+          audio_completion_ratio: item.audio_completion_ratio ?? null,
+          billing_mode: item.billing_mode || '',
+          billing_expr: item.billing_expr || '',
+          enable_groups: safeJson(item.enable_groups || []),
+          supported_endpoint_types: safeJson(item.supported_endpoint_types || []),
+          ...priceFields,
+          pricing_version: item.pricing_version || result.pricing?.pricing_version || '',
+          source: item.source || result.pricing?.source || 'pricing',
+          raw_payload: safeJson(item.raw || {}),
+          now
+        });
+      }
+    }
+
     db.prepare(`
       UPDATE upstream_sites
       SET status='active', last_sync_at=?, last_sync_error='', updated_at=?
@@ -286,6 +348,17 @@ function pruneTelemetry(siteId) {
         LIMIT ?
       )
   `).run(siteId, siteId, config.maxRateSnapshots);
+
+  db.prepare(`
+    DELETE FROM model_pricing_snapshots
+    WHERE upstream_site_id = ?
+      AND id NOT IN (
+        SELECT id FROM model_pricing_snapshots
+        WHERE upstream_site_id = ?
+        ORDER BY captured_at DESC, id DESC
+        LIMIT ?
+      )
+  `).run(siteId, siteId, Math.max(config.maxRateSnapshots, 5000));
 }
 
 function saveSyncLog(siteId, syncType, startedAt, status, error, summary = '') {
@@ -335,6 +408,47 @@ function listRateChanges(limit = 100) {
   `).all(limit);
 }
 
+function listModelPricing(siteId, limit = 300) {
+  const rows = db.prepare(`
+    SELECT *
+    FROM model_pricing_snapshots
+    WHERE upstream_site_id = ?
+    ORDER BY captured_at DESC, id DESC
+  `).all(siteId);
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    if (seen.has(row.model_name)) continue;
+    seen.add(row.model_name);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function listAllModelPricing(limit = 1000) {
+  const rows = db.prepare(`
+    SELECT p.*, s.name AS upstream_name, s.base_url
+    FROM model_pricing_snapshots p
+    JOIN upstream_sites s ON s.id = p.upstream_site_id
+    ORDER BY p.captured_at DESC, p.id DESC
+  `).all();
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = `${row.upstream_site_id}:${row.model_name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function getModelPricingBoard() {
+  return groupModelPricingBoard(listAllModelPricing(5000));
+}
+
 function countUnacknowledgedRateChanges() {
   return db.prepare(`
     SELECT COUNT(*) AS count
@@ -379,6 +493,12 @@ function capabilityMatrix(siteId) {
   } catch {
     subscriptionSummary = {};
   }
+  let pricingSummary = {};
+  try {
+    pricingSummary = JSON.parse(snapshot?.pricing_summary || '{}');
+  } catch {
+    pricingSummary = {};
+  }
   const rates = listRates(siteId, 1);
   const logs = listSyncLogs(siteId, 20);
   const latestLog = logs[0];
@@ -391,6 +511,7 @@ function capabilityMatrix(siteId) {
     channels: Number(snapshot?.channel_count || 0) > 0,
     payment: Boolean(snapshot && Number(snapshot.payment_enabled) && !Number(snapshot.balance_recharge_disabled)),
     subscription: Boolean(subscriptionSummary?.enabled && subscriptionSummary?.active_count),
+    pricing: Boolean(pricingSummary?.enabled && pricingSummary?.model_count),
     errors: latestLog?.status === 'failed' ? [latestLog.error_message] : []
   };
 }
@@ -488,6 +609,9 @@ module.exports = {
   getSnapshot,
   listSnapshotHistory,
   listRates,
+  listModelPricing,
+  listAllModelPricing,
+  getModelPricingBoard,
   listRateChanges,
   countUnacknowledgedRateChanges,
   acknowledgeRateChange,

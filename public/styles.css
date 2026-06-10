@@ -488,6 +488,144 @@ td {
   font-family: "Trebuchet MS", Verdana, sans-serif;
 }
 
+.detail-jump-actions {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0 20px;
+}
+
+.model-pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 10px 0 22px;
+}
+
+.model-price-card {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.36);
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+}
+
+.model-price-card strong {
+  overflow-wrap: anywhere;
+}
+
+.model-price-card span {
+  font-size: 22px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 900;
+  color: var(--accent);
+}
+
+.model-price-card small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.pricing-board {
+  display: grid;
+  gap: 22px;
+}
+
+.model-board-section {
+  display: grid;
+  gap: 12px;
+}
+
+.model-board-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-board-title h3 {
+  margin: 0;
+}
+
+.model-board-title span {
+  color: var(--muted);
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.model-board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.model-board-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.model-board-head {
+  display: grid;
+  gap: 8px;
+}
+
+.model-board-head strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 20px;
+}
+
+.model-board-head small,
+.upstream-price-row small {
+  color: var(--muted);
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+}
+
+.model-board-head > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 7px 11px;
+  color: var(--accent);
+  background: rgba(13, 107, 95, 0.1);
+  font-family: "Times New Roman", Times, "Noto Serif SC", serif;
+  font-weight: 900;
+}
+
+.model-board-head > span em {
+  font-style: normal;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+}
+
+.upstream-price-list {
+  display: grid;
+  gap: 8px;
+}
+
+.upstream-price-row {
+  display: grid;
+  gap: 3px;
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+}
+
+.upstream-price-row span {
+  color: var(--ink);
+  font-weight: 900;
+  font-family: "Times New Roman", Times, "Noto Serif SC", serif;
+}
+
 .recharge-box {
   margin: 10px 0 20px;
   border: 1px solid var(--line);

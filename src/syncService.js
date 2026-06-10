@@ -33,7 +33,7 @@ async function syncSite(siteId) {
       startedAt,
       'success',
       null,
-      `balance=${result.snapshot.balance ?? 'n/a'}, rates=${result.rates.length}, keys=${result.keys.length}, todayTokens=${result.snapshot.today_tokens}, ${rechargeSummary(result.snapshot)}`
+      `balance=${result.snapshot.balance ?? 'n/a'}, rates=${result.rates.length}, modelPricing=${result.model_pricing?.length || 0}, keys=${result.keys.length}, todayTokens=${result.snapshot.today_tokens}, ${rechargeSummary(result.snapshot)}`
     );
     return result;
   } catch (err) {

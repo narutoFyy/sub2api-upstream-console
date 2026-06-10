@@ -1,0 +1,165 @@
+const OPENAI_HINTS = ['openai', 'gpt-', 'o1', 'o3', 'o4', 'chatgpt'];
+const CLAUDE_HINTS = ['claude', 'anthropic'];
+
+function finiteNumber(value, fallback = null) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function pickEffectiveGroup(enableGroups = [], groupRatio = {}) {
+  const groups = Array.isArray(enableGroups) ? enableGroups : [];
+  let best = { group: groups[0] || 'default', ratio: 1 };
+  let found = false;
+
+  for (const group of groups) {
+    const ratio = finiteNumber(groupRatio[group]);
+    if (ratio === null) continue;
+    if (!found || ratio < best.ratio) {
+      best = { group, ratio };
+      found = true;
+    }
+  }
+
+  return best;
+}
+
+function calculateTokenPrices(model, groupRatio = 1) {
+  const modelRatio = finiteNumber(model.model_ratio);
+  const completionRatio = finiteNumber(model.completion_ratio, 1);
+  if (modelRatio === null) {
+    return {
+      input_usd_per_1m: null,
+      output_usd_per_1m: null,
+      cache_read_usd_per_1m: null,
+      cache_write_usd_per_1m: null
+    };
+  }
+
+  const base = modelRatio * 2 * groupRatio;
+  const cacheRatio = finiteNumber(model.cache_ratio);
+  const createCacheRatio = finiteNumber(model.create_cache_ratio);
+  return {
+    input_usd_per_1m: base,
+    output_usd_per_1m: base * completionRatio,
+    cache_read_usd_per_1m: cacheRatio === null ? null : base * cacheRatio,
+    cache_write_usd_per_1m: createCacheRatio === null ? null : base * createCacheRatio
+  };
+}
+
+function calculatePricingFields(model, groupRatioMap = {}) {
+  const enableGroups = Array.isArray(model.enable_groups) ? model.enable_groups : parseJsonArray(model.enable_groups);
+  const effective = pickEffectiveGroup(enableGroups, groupRatioMap);
+  const isRequest = Number(model.quota_type || 0) === 1;
+  const modelPrice = finiteNumber(model.model_price);
+
+  if (isRequest) {
+    return {
+      effective_group: effective.group,
+      effective_group_ratio: effective.ratio,
+      official_input_usd_per_1m: null,
+      official_output_usd_per_1m: null,
+      official_cache_read_usd_per_1m: null,
+      official_cache_write_usd_per_1m: null,
+      official_request_usd: modelPrice,
+      upstream_input_usd_per_1m: null,
+      upstream_output_usd_per_1m: null,
+      upstream_cache_read_usd_per_1m: null,
+      upstream_cache_write_usd_per_1m: null,
+      upstream_request_usd: modelPrice === null ? null : modelPrice * effective.ratio
+    };
+  }
+
+  const official = calculateTokenPrices(model, 1);
+  const upstream = calculateTokenPrices(model, effective.ratio);
+  return {
+    effective_group: effective.group,
+    effective_group_ratio: effective.ratio,
+    official_input_usd_per_1m: official.input_usd_per_1m,
+    official_output_usd_per_1m: official.output_usd_per_1m,
+    official_cache_read_usd_per_1m: official.cache_read_usd_per_1m,
+    official_cache_write_usd_per_1m: official.cache_write_usd_per_1m,
+    official_request_usd: null,
+    upstream_input_usd_per_1m: upstream.input_usd_per_1m,
+    upstream_output_usd_per_1m: upstream.output_usd_per_1m,
+    upstream_cache_read_usd_per_1m: upstream.cache_read_usd_per_1m,
+    upstream_cache_write_usd_per_1m: upstream.cache_write_usd_per_1m,
+    upstream_request_usd: null
+  };
+}
+
+function modelFamily(model) {
+  const text = `${model.model_name || ''} ${model.vendor || ''} ${model.tags || ''}`.toLowerCase();
+  if (CLAUDE_HINTS.some((hint) => text.includes(hint))) return 'claude';
+  if (OPENAI_HINTS.some((hint) => text.includes(hint))) return 'openai';
+  return 'other';
+}
+
+function groupModelPricingBoard(rows = []) {
+  const groups = { openai: new Map(), claude: new Map() };
+  for (const row of rows) {
+    const family = modelFamily(row);
+    if (!groups[family]) continue;
+    const modelName = row.model_name || '';
+    if (!modelName) continue;
+    if (!groups[family].has(modelName)) {
+      groups[family].set(modelName, {
+        model_name: modelName,
+        vendor: row.vendor || '',
+        tags: row.tags || '',
+        quota_type: Number(row.quota_type || 0),
+        official_input_usd_per_1m: finiteNumber(row.official_input_usd_per_1m),
+        official_output_usd_per_1m: finiteNumber(row.official_output_usd_per_1m),
+        official_cache_read_usd_per_1m: finiteNumber(row.official_cache_read_usd_per_1m),
+        official_cache_write_usd_per_1m: finiteNumber(row.official_cache_write_usd_per_1m),
+        official_request_usd: finiteNumber(row.official_request_usd),
+        upstreams: []
+      });
+    }
+    groups[family].get(modelName).upstreams.push(row);
+  }
+
+  const sortUpstreams = (items) => items.sort((a, b) => {
+    const av = finiteNumber(a.upstream_input_usd_per_1m, finiteNumber(a.upstream_request_usd, Infinity));
+    const bv = finiteNumber(b.upstream_input_usd_per_1m, finiteNumber(b.upstream_request_usd, Infinity));
+    return av - bv;
+  });
+
+  const toArray = (map) => [...map.values()]
+    .map((item) => ({ ...item, upstreams: sortUpstreams(item.upstreams) }))
+    .sort((a, b) => a.model_name.localeCompare(b.model_name));
+
+  return {
+    openai: toArray(groups.openai),
+    claude: toArray(groups.claude)
+  };
+}
+
+module.exports = {
+  calculatePricingFields,
+  groupModelPricingBoard,
+  modelFamily,
+  parseJsonArray,
+  parseJsonObject
+};

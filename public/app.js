@@ -1,5 +1,6 @@
 const state = {
   dashboard: null,
+  modelPricingBoard: { openai: [], claude: [] },
   logs: [],
   details: new Map(),
   authEnabled: false,
@@ -27,6 +28,12 @@ function tokenText(value) {
 function rateText(value) {
   if (value === null || value === undefined || value === '') return '不可用';
   return `${money.format(Number(value))}x`;
+}
+
+function usdText(value, suffix = '/ 100万 token') {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '不可用';
+  return `$${money.format(n)} ${suffix}`;
 }
 
 function rechargeText(site) {
@@ -319,6 +326,7 @@ function renderRows() {
         </td>
         <td>${tokenText(site.today_tokens)}</td>
         <td>${money.format(site.today_cost || 0)}</td>
+        <td>${escapeHtml(subscriptionCountText(site))}</td>
         <td>${rateText(site.codex_rate)}</td>
         <td>${rateText(site.min_rate)} - ${rateText(site.max_rate)}</td>
         <td>
@@ -336,7 +344,7 @@ function renderRows() {
       </tr>
     `;
   }).join('');
-  document.querySelector('#upstreamRows').innerHTML = rows || '<tr><td colspan="10" class="empty">还没有匹配的上游。</td></tr>';
+  document.querySelector('#upstreamRows').innerHTML = rows || '<tr><td colspan="11" class="empty">还没有匹配的上游。</td></tr>';
 }
 
 function renderRateChanges(changes) {
@@ -390,6 +398,63 @@ function renderRates() {
   `).join('') : '<p class="empty">没有匹配的倍率。可以换个筛选条件，或先同步上游。</p>';
 }
 
+function renderUpstreamPriceRow(item) {
+  const isRequest = Number(item.quota_type || 0) === 1;
+  const priceText = isRequest
+    ? usdText(item.upstream_request_usd, '/ 次')
+    : `输入 ${usdText(item.upstream_input_usd_per_1m)} · 输出 ${usdText(item.upstream_output_usd_per_1m)}`;
+  const cacheText = !isRequest && Number.isFinite(Number(item.upstream_cache_read_usd_per_1m))
+    ? `缓存读 ${usdText(item.upstream_cache_read_usd_per_1m)}`
+    : '';
+  return `
+    <div class="upstream-price-row">
+      <strong>${escapeHtml(item.upstream_name || `上游 #${item.upstream_site_id}`)}</strong>
+      <span>${escapeHtml(priceText)}</span>
+      <small>分组 ${escapeHtml(item.effective_group || 'default')} · 分组倍率 ${rateText(item.effective_group_ratio || 1)}${cacheText ? ` · ${escapeHtml(cacheText)}` : ''}</small>
+    </div>
+  `;
+}
+
+function renderModelPriceCard(model) {
+  const isRequest = Number(model.quota_type || 0) === 1;
+  const officialText = isRequest
+    ? usdText(model.official_request_usd, '/ 次')
+    : `输入 ${usdText(model.official_input_usd_per_1m)} · 输出 ${usdText(model.official_output_usd_per_1m)}`;
+  return `
+    <article class="model-board-card">
+      <div class="model-board-head">
+        <div>
+          <strong>${escapeHtml(model.model_name)}</strong>
+          <small>${escapeHtml(model.vendor || '')}${model.tags ? ` · ${escapeHtml(model.tags)}` : ''}</small>
+        </div>
+        <span><em>官方原价</em>${escapeHtml(officialText)}</span>
+      </div>
+      <div class="upstream-price-list">
+        ${(model.upstreams || []).map(renderUpstreamPriceRow).join('') || '<p class="empty">暂无上游价格。</p>'}
+      </div>
+    </article>
+  `;
+}
+
+function renderModelPricingBoard() {
+  const board = state.modelPricingBoard || { openai: [], claude: [] };
+  const sections = [
+    ['OpenAI 模型', board.openai || []],
+    ['Claude 模型', board.claude || []]
+  ];
+  document.querySelector('#modelPricingBoard').innerHTML = sections.map(([title, models]) => `
+    <section class="model-board-section">
+      <div class="model-board-title">
+        <h3>${escapeHtml(title)}</h3>
+        <span>${models.length} 个模型</span>
+      </div>
+      <div class="model-board-grid">
+        ${models.length ? models.map(renderModelPriceCard).join('') : '<p class="empty">暂无可对比的模型价格。请先同步支持 /api/pricing 的 new-api 上游。</p>'}
+      </div>
+    </section>
+  `).join('');
+}
+
 function trendSvg(history) {
   const items = [...(history || [])].reverse().slice(-40);
   if (items.length < 2) return '<p class="empty">趋势数据还不够，至少同步两次后会显示折线。</p>';
@@ -418,9 +483,10 @@ function renderCapabilities(capabilities = {}) {
     ['balance', '余额'],
     ['usage', '用量'],
     ['rates', '倍率'],
-    ['keys', 'Key'],
+    ['pricing', '模型广场'],
+    ['keys', '密钥'],
     ['channels', '渠道'],
-    ['subscription', 'Subscription'],
+    ['subscription', '订阅'],
     ['payment', '充值']
   ];
   return items.map(([key, label]) => `
@@ -491,6 +557,35 @@ function parseSubscriptionSummary(snapshot) {
   }
 }
 
+function subscriptionCountText(snapshot) {
+  const summary = parseSubscriptionSummary(snapshot);
+  if (!summary.enabled) return '-';
+  const active = Number(summary.active_count || 0);
+  const total = Number(summary.total_count || active);
+  return `${active} / ${total}`;
+}
+
+function parsePricingSummary(snapshot) {
+  const raw = snapshot?.pricing_summary;
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function modelPricingValue(item) {
+  if (Number(item?.quota_type) === 1 && Number.isFinite(Number(item?.model_price))) {
+    return `${money.format(Number(item.model_price))} 固定价格`;
+  }
+  if (Number.isFinite(Number(item?.model_ratio))) {
+    return `${money.format(Number(item.model_ratio))}x`;
+  }
+  return 'n/a';
+}
+
 function dateTimeFromSeconds(seconds) {
   const n = Number(seconds);
   if (!Number.isFinite(n) || n <= 0) return 'n/a';
@@ -501,29 +596,71 @@ function renderSubscriptionPanel(snapshot) {
   const summary = parseSubscriptionSummary(snapshot);
   if (!summary.enabled || !summary.primary) {
     return `
-      <h3>Subscription</h3>
-      <p class="empty">No active subscription.</p>
+      <h3>订阅套餐</h3>
+      <p class="empty">暂无活跃订阅套餐。</p>
     `;
   }
   const sub = summary.primary;
-  const planName = sub.plan_title || `Plan #${sub.plan_id || 'n/a'}`;
+  const planName = sub.plan_title || `套餐 #${sub.plan_id || 'n/a'}`;
   const used = Number(sub.amount_used || 0);
   const total = Number(sub.amount_total || 0);
   const remaining = Number(sub.amount_remaining || 0);
   const percent = Number.isFinite(Number(sub.usage_percent)) ? Number(sub.usage_percent) : 0;
+  const activeCount = Number(summary.active_count || 0);
+  const totalCount = Number(summary.total_count || activeCount);
   return `
-    <h3>Subscription</h3>
+    <h3>订阅套餐</h3>
     <div class="detail-grid">
-      <article class="metric"><span>Plan</span><strong>${escapeHtml(planName)}</strong></article>
-      <article class="metric"><span>Subscription ID</span><strong>#${escapeHtml(sub.id || 'n/a')}</strong></article>
-      <article class="metric"><span>Status</span><strong>${escapeHtml(sub.status || 'unknown')}</strong></article>
-      <article class="metric"><span>Billing</span><strong>${escapeHtml(summary.billing_preference || 'unknown')}</strong></article>
-      <article class="metric"><span>Remaining Days</span><strong>${sub.days_remaining ?? 'n/a'}</strong></article>
-      <article class="metric"><span>Expires At</span><strong>${escapeHtml(dateTimeFromSeconds(sub.end_time))}</strong></article>
-      <article class="metric"><span>Total Quota</span><strong>${money.format(total)}</strong></article>
-      <article class="metric"><span>Used Quota</span><strong>${money.format(used)}</strong></article>
-      <article class="metric"><span>Remaining Quota</span><strong>${money.format(remaining)}</strong></article>
-      <article class="metric"><span>Used Percent</span><strong>${money.format(percent)}%</strong></article>
+      <article class="metric"><span>活跃 / 全部</span><strong>${activeCount} / ${totalCount}</strong></article>
+      <article class="metric"><span>套餐</span><strong>${escapeHtml(planName)}</strong></article>
+      <article class="metric"><span>订阅 ID</span><strong>#${escapeHtml(sub.id || 'n/a')}</strong></article>
+      <article class="metric"><span>状态</span><strong>${escapeHtml(sub.status || '未知')}</strong></article>
+      <article class="metric"><span>扣费策略</span><strong>${escapeHtml(summary.billing_preference || '未知')}</strong></article>
+      <article class="metric"><span>剩余天数</span><strong>${sub.days_remaining ?? 'n/a'}</strong></article>
+      <article class="metric"><span>到期时间</span><strong>${escapeHtml(dateTimeFromSeconds(sub.end_time))}</strong></article>
+      <article class="metric"><span>下次重置</span><strong>${escapeHtml(dateTimeFromSeconds(sub.next_reset_time))}</strong></article>
+      <article class="metric"><span>总额度</span><strong>${money.format(total)}</strong></article>
+      <article class="metric"><span>已用额度</span><strong>${money.format(used)}</strong></article>
+      <article class="metric"><span>剩余额度</span><strong>${money.format(remaining)}</strong></article>
+      <article class="metric"><span>使用比例</span><strong>${money.format(percent)}%</strong></article>
+    </div>
+  `;
+}
+
+function renderModelPricingPanel(detail) {
+  const snapshot = detail.snapshot || {};
+  const summary = parsePricingSummary(snapshot);
+  const items = detail.model_pricing || [];
+  if (!summary.enabled || !items.length) {
+    return `
+      <h3 id="modelPricingSection">模型广场倍率</h3>
+      <p class="empty">该上游暂未同步到 NewAPI 模型广场倍率。可能是 /api/pricing 未开放，或还没有同步。</p>
+    `;
+  }
+  const quickItems = items.slice(0, 30);
+  return `
+    <h3 id="modelPricingSection">模型广场倍率</h3>
+    <div class="detail-grid">
+      <article class="metric"><span>模型数量</span><strong>${Number(summary.model_count || items.length)}</strong></article>
+      <article class="metric"><span>供应商数量</span><strong>${Number(summary.vendor_count || 0)}</strong></article>
+      <article class="metric"><span>倍率范围</span><strong>${rateText(summary.min_model_rate)} - ${rateText(summary.max_model_rate)}</strong></article>
+      <article class="metric"><span>Codex 模型</span><strong>${Number(summary.codex_model_count || 0)}</strong></article>
+      <article class="metric"><span>Codex 最低</span><strong>${rateText(summary.codex_min_rate)}</strong></article>
+      <article class="metric"><span>数据来源</span><strong>${escapeHtml(summary.source || 'pricing')}</strong></article>
+    </div>
+    ${summary.pricing_version ? `<p class="detail-note">模型广场版本：${escapeHtml(summary.pricing_version)}</p>` : ''}
+    <div class="model-pricing-grid">
+      ${quickItems.map((item) => `
+        <article class="model-price-card">
+          <strong>${escapeHtml(item.model_name)}</strong>
+          <span>${escapeHtml(modelPricingValue(item))}</span>
+          <small>
+            ${escapeHtml(item.vendor || '未知供应商')}
+            ${Number.isFinite(Number(item.completion_ratio)) ? ` · 输出 ${money.format(Number(item.completion_ratio))}x` : ''}
+            ${Number.isFinite(Number(item.cache_ratio)) ? ` · 缓存 ${money.format(Number(item.cache_ratio))}x` : ''}
+          </small>
+        </article>
+      `).join('')}
     </div>
   `;
 }
@@ -547,11 +684,16 @@ function renderDetail(detail) {
       <article class="metric"><span>Key 数量</span><strong>${snapshot.key_count || 0}</strong></article>
       <article class="metric"><span>渠道数量</span><strong>${snapshot.channel_count || 0}</strong></article>
       <article class="metric"><span>倍率范围</span><strong>${rateText(snapshot.min_rate)} - ${rateText(snapshot.max_rate)}</strong></article>
+      <article class="metric"><span>模型广场</span><strong>${Number(parsePricingSummary(snapshot).model_count || 0)}</strong></article>
     </div>
     ${rechargeMetaText(snapshot) ? `<p class="detail-note">${escapeHtml(rechargeMetaText(snapshot))}</p>` : ''}
     <h3>接口能力矩阵</h3>
     <div class="capabilities">${renderCapabilities(detail.capabilities)}</div>
+    <div class="detail-jump-actions">
+      <button class="secondary" data-scroll-target="modelPricingSection">查看模型广场倍率</button>
+    </div>
     ${renderSubscriptionPanel(snapshot)}
+    ${renderModelPricingPanel(detail)}
     ${renderRechargePanel(detail)}
     <h3>余额 / 用量趋势</h3>
     ${trendSvg(detail.history || [])}
@@ -588,12 +730,14 @@ async function loadDetails(sites) {
 }
 
 async function refresh() {
-  const [dashboard, logs] = await Promise.all([
+  const [dashboard, logs, modelPricingBoard] = await Promise.all([
     api('/api/dashboard'),
-    api('/api/sync-logs')
+    api('/api/sync-logs'),
+    api('/api/model-pricing/board').catch(() => ({ openai: [], claude: [] }))
   ]);
   state.dashboard = dashboard;
   state.logs = logs.items || [];
+  state.modelPricingBoard = modelPricingBoard;
   await loadDetails(dashboard.sites || []);
   renderCards(dashboard.totals);
   renderRechargeAlerts(dashboard.recharge_alerts || []);
@@ -601,6 +745,7 @@ async function refresh() {
   renderRateChanges(dashboard.changes || []);
   renderLogs(state.logs.slice(0, 20));
   renderRates();
+  renderModelPricingBoard();
   if (state.selectedDetailId && state.details.has(state.selectedDetailId)) {
     renderDetail(state.details.get(state.selectedDetailId));
   }
@@ -719,6 +864,11 @@ document.addEventListener('click', async (event) => {
     const detail = state.details.get(Number(detailId)) || await api(`/api/upstreams/${detailId}`);
     state.details.set(Number(detailId), detail);
     renderDetail(detail);
+  }
+
+  const scrollTarget = event.target?.dataset?.scrollTarget;
+  if (scrollTarget) {
+    document.getElementById(scrollTarget)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   const copyUrl = event.target?.dataset?.copyUrl;

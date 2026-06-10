@@ -74,6 +74,22 @@ function withoutRawPayload(row) {
       safeRow.subscription_summary = {};
     }
   }
+  if (typeof safeRow.pricing_summary === 'string') {
+    try {
+      safeRow.pricing_summary = JSON.parse(safeRow.pricing_summary || '{}');
+    } catch {
+      safeRow.pricing_summary = {};
+    }
+  }
+  for (const field of ['enable_groups', 'supported_endpoint_types']) {
+    if (typeof safeRow[field] === 'string') {
+      try {
+        safeRow[field] = JSON.parse(safeRow[field] || '[]');
+      } catch {
+        safeRow[field] = [];
+      }
+    }
+  }
   return safeRow;
 }
 
@@ -293,6 +309,7 @@ app.post('/api/upstreams/test', async (req, res, next) => {
       snapshot: result.snapshot,
       rates_count: result.rates.length,
       keys_count: result.keys.length,
+      model_pricing_count: result.model_pricing?.length || 0,
       warnings: result.errors
     });
   } catch (err) {
@@ -309,6 +326,7 @@ app.get('/api/upstreams/:id', (req, res) => {
     credentials: safeCredentials(repo.getMaskedCredentials(id)),
     snapshot: withoutRawPayload(repo.getSnapshot(id)),
     rates: repo.listRates(id, 300).map(withoutRawPayload),
+    model_pricing: repo.listModelPricing(id, 300).map(withoutRawPayload),
     logs: repo.listSyncLogs(id, 100),
     recharge_orders: repo.listRechargeOrders(id, 20).map(withoutRawPayload),
     history: repo.listSnapshotHistory(id, 120).map(withoutRawPayload),
@@ -377,6 +395,14 @@ app.post('/api/sync-all', async (req, res, next) => {
 
 app.get('/api/rate-changes', (req, res) => {
   res.json({ items: repo.listRateChanges(200) });
+});
+
+app.get('/api/model-pricing', (req, res) => {
+  res.json({ items: repo.listAllModelPricing(2000).map(withoutRawPayload) });
+});
+
+app.get('/api/model-pricing/board', (req, res) => {
+  res.json(repo.getModelPricingBoard());
 });
 
 app.post('/api/upstreams/:id/recharge-orders', async (req, res, next) => {

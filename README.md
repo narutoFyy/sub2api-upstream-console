@@ -2,7 +2,7 @@
 
 一个独立的 Sub2API 上游聚合控制台，用来集中查看多个上游账号的余额、用量、倍率、充值比例和同步状态。
 
-当前版本：`v1.4.0`
+当前版本：`v1.6.0`
 
 ## 项目定位
 
@@ -31,6 +31,7 @@ http://localhost:4317
 - [需求文档](docs/PRD_CN.md)
 - [部署说明](docs/DEPLOY_CN.md)
 - [备份说明](docs/BACKUP_CN.md)
+- [模型广场价格 TODO](docs/MODEL_PRICING_TODO_CN.md)
 - [代办清单](TODO_CN.md)
 
 ## 当前功能
@@ -50,6 +51,7 @@ http://localhost:4317
 - 后台按上游同步频率自动同步。
 - 展示余额、今日/近 7 天/近 30 天用量、成本、API Key 数量、渠道数量和分组倍率。
 - 对 `new-api` 上游支持读取用户订阅摘要，包括订阅状态、计费偏好、到期时间、总额度、已用额度、剩余额度和使用百分比。
+- 对 `new-api` 上游支持读取模型广场官方倍率，优先使用 `/api/pricing`，并可用 `/api/ratio_config` 兜底。
 - 保存历史快照，展示余额和用量趋势。
 - 记录同步日志、最近成功时间、最近失败原因。
 - 支持低余额、长期未同步、同步失败和倍率变化提醒。
@@ -103,6 +105,30 @@ http://localhost:4317
 | `MAX_RATE_SNAPSHOTS` | `2000` | 每个上游保留的倍率快照数量 |
 
 ## 更新说明
+
+### v1.6.0 - 2026-06-10
+
+- 新增“模型价格广场”首页板块，固定分成 `OpenAI 模型` 和 `Claude 模型` 两个区域。
+- 按 QuantumNous/new-api 前端源码公式计算价格：输入价 `model_ratio * 2 * group_ratio`，输出价再乘 `completion_ratio`。
+- 每个模型卡片顶部明确标注“官方原价”，并在下方列出各上游叠加分组倍率后的实际输入/输出价格。
+- 模型价格广场相关价格数字统一使用 `Times New Roman` 字体，便于区分官方原价与上游实际价格。
+- 新增 `src/modelPricing.js` 价格计算模块和 `/api/model-pricing/board` 聚合接口，用于按厂商板块聚合模型价格。
+- `model_pricing_snapshots` 增加官方价、上游实际价、实际分组和分组倍率字段。
+
+### v1.5.0 - 2026-06-10
+
+- 接入 QuantumNous/new-api 模型广场接口 `/api/pricing`，同步模型名、供应商、标签、端点类型、启用分组、模型倍率、补全倍率、缓存倍率、固定价格和 pricing version。
+- 新增 `model_pricing_snapshots` 本地快照表，并在当前快照中保存 `pricing_summary`，用于展示模型数量、供应商数量、倍率范围和 Codex 相关模型最低倍率。
+- 上游详情页新增“模型广场倍率”区块，展示模型广场摘要和前 30 个模型的官方倍率。
+- 增加 `/api/model-pricing` 聚合接口，后续可基于该接口继续做跨上游同模型倍率对比。
+- 同步日志增加 `modelPricing=数量`，方便确认该上游是否成功同步模型广场。
+
+### v1.4.1 - 2026-06-10
+
+- 按 QuantumNous/new-api 源码适配 `/api/subscription/self` 订阅结构，读取 `subscriptions` 活跃订阅和 `all_subscriptions` 全部订阅数量。
+- 上游列表新增“订阅”列，显示 `活跃 / 全部` 数量，例如 `1 / 1`。
+- new-api 订阅详情新增 Active / Total 和 Next Reset 展示，并兼容仅返回全部订阅时自动计算活跃数量。
+- 同步 `package-lock.json` 项目版本号，避免 npm 元数据仍停留在旧版本。
 
 ### v1.4.0 - 2026-06-09
 

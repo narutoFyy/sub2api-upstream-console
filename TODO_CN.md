@@ -118,3 +118,21 @@
 - [x] 当上游没有官方充值订单接口或没有官方可用支付方式时，直接显示“该上游不支持在线充值”。
 - [x] 禁止抓取或模拟第三方支付密码、短信验证码、支付确认等敏感支付动作；二维码只能来自上游官方订单接口。
 - [x] 对官方订单接口返回的不同支付结果做适配：二维码、收银台链接、OAuth 跳转和 JSAPI 信息。
+
+## 第八阶段：NewAPI 模型广场与官方倍率聚合
+
+> 详细实施文档见：[模型广场官方原价与上游实际价格 TODO](docs/MODEL_PRICING_TODO_CN.md)。后续实现以“官方原价 + 上游倍率 = 实际每 100 万 token 价格”为目标，不再只展示模型倍率。
+
+- [x] 调研并接入 QuantumNous/new-api 官方“模型广场”接口，优先使用 `GET /api/pricing`，读取模型名称、供应商、标签、端点类型、启用分组、模型倍率、补全倍率、缓存倍率、固定价格和分层计费表达式。
+- [x] 兼容 `GET /api/ratio_config` 作为补充来源；当 `/api/pricing` 因权限、导航模块关闭或上游版本差异不可用时，降级读取 `model_ratio`、`completion_ratio`、`cache_ratio`、`model_price` 等原始倍率配置。
+- [x] 在上游同步流程中为 new-api 增加“模型广场/官方倍率”能力检测，记录接口是否可用、最近同步时间、模型数量、供应商数量和 pricing version。
+- [x] 新增本地数据表或快照字段保存每个上游的官方模型倍率，至少包含：`upstream_site_id`、`model_name`、`vendor`、`quota_type`、`model_ratio`、`model_price`、`completion_ratio`、`cache_ratio`、`create_cache_ratio`、`image_ratio`、`audio_ratio`、`billing_mode`、`billing_expr`、`enable_groups`、`supported_endpoint_types`、`captured_at`。
+- [x] 前端新增“模型广场/官方倍率”详情区块，展示该上游同步到的模型倍率。
+- [x] 增强“模型广场价格”前端展示，先固定分成 `OpenAI 模型` 和 `Claude 模型` 两个板块，每个模型下直接展示各上游实际价格。
+- [x] 在上游详情页展示该上游可用模型数量、最低/最高模型倍率、Codex 相关模型倍率、官方 pricing version 和最近更新时间。
+- [x] 支持把多个上游的同名模型放到同一行对比，快速查看哪个上游的实际价格更低、是否固定价格、是否有缓存/图片/音频特殊倍率。
+- [x] 对 OpenAI/GPT 和 Claude 模型增加基础别名匹配，避免同一模型因不同上游命名差异漏掉。
+- [ ] 标记异常倍率，例如倍率缺失、倍率为 0、明显高于同类模型、`model_ratio=37.5 且 completion_ratio=1` 这类 new-api 源码里提到的不可信默认值。
+- [x] 区分“上游分组倍率”和“模型官方倍率”：分组倍率用于账号/分组折扣，模型倍率用于具体模型价格，前端不能混成一个数展示。
+- [ ] 增加手动刷新按钮和后台定时同步；官方倍率变化时记录历史并提示“模型倍率变化”，类似当前分组倍率变化提醒。
+- [x] 在 README 中补充 NewAPI 模型广场能力说明，写清楚该功能依赖上游是否开放 `/api/pricing` 或 `/api/ratio_config`。
