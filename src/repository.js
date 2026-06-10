@@ -2,7 +2,7 @@ const db = require('./db');
 const { encryptSecret, decryptSecret, maskSecret } = require('./crypto');
 const config = require('./config');
 const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
-const { calculatePricingFields, groupModelPricingBoard } = require('./modelPricing');
+const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard } = require('./modelPricing');
 
 function rowToSite(row) {
   if (!row) return null;
@@ -423,7 +423,50 @@ function listModelPricing(siteId, limit = 300) {
     out.push(row);
     if (out.length >= limit) break;
   }
-  return out;
+  if (out.length > 0) return out;
+
+  const site = getSite(siteId);
+  if (!site || site.upstream_type !== 'sub2api') return out;
+  const generated = buildSub2APISiteModelPricing(listAllModelPricing(5000), listLatestRatesForBoard(5000)).get(siteId) || [];
+  const deduped = [];
+  const generatedSeen = new Set();
+  for (const row of generated) {
+    if (generatedSeen.has(row.model_name)) continue;
+    generatedSeen.add(row.model_name);
+    deduped.push(row);
+    if (deduped.length >= limit) break;
+  }
+  return deduped;
+}
+
+function getDetailPricingSummary(siteId) {
+  const snapshot = getSnapshot(siteId);
+  let summary = {};
+  try {
+    summary = JSON.parse(snapshot?.pricing_summary || '{}');
+  } catch {
+    summary = {};
+  }
+  if (summary?.enabled) return summary;
+
+  const site = getSite(siteId);
+  if (!site || site.upstream_type !== 'sub2api') return summary;
+  const items = buildSub2APISiteModelPricing(listAllModelPricing(5000), listLatestRatesForBoard(5000)).get(siteId) || [];
+  if (!items.length) return summary;
+
+  const families = new Set(items.map((item) => item.vendor).filter(Boolean));
+  const ratios = items.map((item) => Number(item.effective_group_ratio)).filter(Number.isFinite);
+  return {
+    enabled: true,
+    source: 'sub2api-rate',
+    model_count: items.length,
+    vendor_count: families.size,
+    min_model_rate: ratios.length ? Math.min(...ratios) : null,
+    max_model_rate: ratios.length ? Math.max(...ratios) : null,
+    codex_model_count: 0,
+    codex_min_rate: null,
+    pricing_version: ''
+  };
 }
 
 function listAllModelPricing(limit = 1000) {
@@ -445,8 +488,27 @@ function listAllModelPricing(limit = 1000) {
   return out;
 }
 
+function listLatestRatesForBoard(limit = 1000) {
+  const rows = db.prepare(`
+    SELECT r.*, s.name AS upstream_name, s.base_url, s.upstream_type
+    FROM group_rate_snapshots r
+    JOIN upstream_sites s ON s.id = r.upstream_site_id
+    ORDER BY r.captured_at DESC, r.id DESC
+  `).all();
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = `${row.upstream_site_id}:${row.group_id}:${row.group_name}:${row.scope}:${row.model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function getModelPricingBoard() {
-  return groupModelPricingBoard(listAllModelPricing(5000));
+  return groupModelPricingBoard(listAllModelPricing(5000), listLatestRatesForBoard(5000));
 }
 
 function countUnacknowledgedRateChanges() {
@@ -609,6 +671,7 @@ module.exports = {
   getSnapshot,
   listSnapshotHistory,
   listRates,
+  getDetailPricingSummary,
   listModelPricing,
   listAllModelPricing,
   getModelPricingBoard,

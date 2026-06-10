@@ -116,9 +116,83 @@ function modelFamily(model) {
   return 'other';
 }
 
-function groupModelPricingBoard(rows = []) {
-  const groups = { openai: new Map(), claude: new Map() };
+function rateFamily(rate) {
+  const text = `${rate.scope || ''} ${rate.group_name || ''} ${rate.model || ''}`.toLowerCase();
+  if (CLAUDE_HINTS.some((hint) => text.includes(hint))) return 'claude';
+  if (OPENAI_HINTS.some((hint) => text.includes(hint))) return 'openai';
+  return 'other';
+}
+
+function scaleOfficialPriceRow(official, rateRow) {
+  const ratio = finiteNumber(rateRow.rate);
+  if (ratio === null) return null;
+  return {
+    upstream_site_id: rateRow.upstream_site_id,
+    upstream_name: rateRow.upstream_name,
+    base_url: rateRow.base_url || '',
+    model_name: official.model_name,
+    vendor: official.vendor || '',
+    tags: official.tags || '',
+    quota_type: Number(official.quota_type || 0),
+    effective_group: rateRow.group_name || rateRow.group_id || 'default',
+    effective_group_ratio: ratio,
+    official_input_usd_per_1m: finiteNumber(official.official_input_usd_per_1m),
+    official_output_usd_per_1m: finiteNumber(official.official_output_usd_per_1m),
+    official_cache_read_usd_per_1m: finiteNumber(official.official_cache_read_usd_per_1m),
+    official_cache_write_usd_per_1m: finiteNumber(official.official_cache_write_usd_per_1m),
+    official_request_usd: finiteNumber(official.official_request_usd),
+    upstream_input_usd_per_1m: finiteNumber(official.official_input_usd_per_1m) === null ? null : finiteNumber(official.official_input_usd_per_1m) * ratio,
+    upstream_output_usd_per_1m: finiteNumber(official.official_output_usd_per_1m) === null ? null : finiteNumber(official.official_output_usd_per_1m) * ratio,
+    upstream_cache_read_usd_per_1m: finiteNumber(official.official_cache_read_usd_per_1m) === null ? null : finiteNumber(official.official_cache_read_usd_per_1m) * ratio,
+    upstream_cache_write_usd_per_1m: finiteNumber(official.official_cache_write_usd_per_1m) === null ? null : finiteNumber(official.official_cache_write_usd_per_1m) * ratio,
+    upstream_request_usd: finiteNumber(official.official_request_usd) === null ? null : finiteNumber(official.official_request_usd) * ratio,
+    source: 'sub2api-rate'
+  };
+}
+
+function mergeSub2APIRows(rows = [], rateRows = []) {
+  const officialByModel = new Map();
   for (const row of rows) {
+    const family = modelFamily(row);
+    if (family === 'other') continue;
+    const modelName = row.model_name || '';
+    if (!modelName || officialByModel.has(modelName)) continue;
+    officialByModel.set(modelName, row);
+  }
+
+  const extraRows = [];
+  for (const rateRow of rateRows) {
+    if ((rateRow.upstream_type || '') !== 'sub2api') continue;
+    const family = rateFamily(rateRow);
+    if (family === 'other') continue;
+    for (const official of officialByModel.values()) {
+      if (modelFamily(official) !== family) continue;
+      extraRows.push(scaleOfficialPriceRow(official, rateRow));
+    }
+  }
+
+  return rows.concat(extraRows.filter(Boolean));
+}
+
+function buildSub2APISiteModelPricing(rows = [], rateRows = []) {
+  const mergedRows = mergeSub2APIRows(rows, rateRows);
+  const siteIds = new Set(rateRows.map((row) => row.upstream_site_id));
+  const result = new Map();
+
+  for (const siteId of siteIds) {
+    const items = mergedRows
+      .filter((row) => row.upstream_site_id === siteId)
+      .sort((a, b) => String(a.model_name || '').localeCompare(String(b.model_name || '')));
+    result.set(siteId, items);
+  }
+
+  return result;
+}
+
+function groupModelPricingBoard(rows = [], rateRows = []) {
+  const mergedRows = mergeSub2APIRows(rows, rateRows);
+  const groups = { openai: new Map(), claude: new Map() };
+  for (const row of mergedRows) {
     const family = modelFamily(row);
     if (!groups[family]) continue;
     const modelName = row.model_name || '';
@@ -157,6 +231,7 @@ function groupModelPricingBoard(rows = []) {
 }
 
 module.exports = {
+  buildSub2APISiteModelPricing,
   calculatePricingFields,
   groupModelPricingBoard,
   modelFamily,

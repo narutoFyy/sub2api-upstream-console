@@ -321,10 +321,14 @@ app.get('/api/upstreams/:id', (req, res) => {
   const id = Number(req.params.id);
   const site = repo.getSite(id);
   if (!site) return res.status(404).json({ error: 'Not found' });
+  const snapshot = withoutRawPayload(repo.getSnapshot(id));
+  if (snapshot) {
+    snapshot.pricing_summary = repo.getDetailPricingSummary(id);
+  }
   res.json({
     site,
     credentials: safeCredentials(repo.getMaskedCredentials(id)),
-    snapshot: withoutRawPayload(repo.getSnapshot(id)),
+    snapshot,
     rates: repo.listRates(id, 300).map(withoutRawPayload),
     model_pricing: repo.listModelPricing(id, 300).map(withoutRawPayload),
     logs: repo.listSyncLogs(id, 100),
