@@ -1,5 +1,6 @@
 const dns = require('node:dns/promises');
 const { assertSafeUpstreamUrl, isPrivateHostname, pickFirstNumber, toNumber } = require('./utils');
+const { summarizePlatformPricing, summarizePlatformRates } = require('./modelPricing');
 
 class UpstreamHTTPError extends Error {
   constructor(message, status, body) {
@@ -303,22 +304,6 @@ function normalizeRates(ratesPayload) {
   return [];
 }
 
-function normalizeAliases(aliases = ['codex']) {
-  if (Array.isArray(aliases)) return aliases;
-  if (typeof aliases === 'string') {
-    return aliases.split(',').map((alias) => alias.trim()).filter(Boolean);
-  }
-  return ['codex'];
-}
-
-function matchesAnyAlias(rate, aliases = ['codex']) {
-  const haystack = `${rate.group_name} ${rate.scope} ${rate.model}`.toLowerCase();
-  return normalizeAliases(aliases)
-    .map((alias) => String(alias || '').trim().toLowerCase())
-    .filter(Boolean)
-    .some((alias) => haystack.includes(alias));
-}
-
 function normalizeNewAPIRates(groupsPayload, ratioConfigPayload = null) {
   const out = [];
   const groups = groupsPayload && typeof groupsPayload === 'object' ? groupsPayload : {};
@@ -502,7 +487,7 @@ function normalizeEndpointTypes(value) {
   return [String(value)].filter(Boolean);
 }
 
-function normalizeNewAPIPricing(pricingPayload, ratioConfigPayload = null, codexAliases = []) {
+function normalizeNewAPIPricing(pricingPayload, ratioConfigPayload = null) {
   const pricingItems = arrayFromMaybe(pricingPayload);
   const pricingOuter = pricingPayload?.payload || pricingPayload || {};
   const ratioConfig = ratioConfigPayload && typeof ratioConfigPayload === 'object' ? ratioConfigPayload : {};
@@ -551,11 +536,7 @@ function normalizeNewAPIPricing(pricingPayload, ratioConfigPayload = null, codex
   const ratioValues = items
     .map((item) => item.quota_type === 1 ? item.model_price : item.model_ratio)
     .filter(Number.isFinite);
-  const aliases = normalizeAliases(codexAliases);
-  const codexItems = items.filter((item) => {
-    const text = `${item.model_name} ${item.vendor} ${item.tags}`.toLowerCase();
-    return aliases.some((alias) => text.includes(String(alias).toLowerCase()));
-  });
+  const platformSummary = summarizePlatformPricing(items);
   const vendorNames = new Set(items.map((item) => item.vendor).filter(Boolean));
   const pricingVersion = pricingOuter?.pricing_version || pricingItems.find((item) => item.pricing_version)?.pricing_version || '';
   const groupRatio = pricingOuter?.group_ratio && typeof pricingOuter.group_ratio === 'object' ? pricingOuter.group_ratio : {};
@@ -567,10 +548,7 @@ function normalizeNewAPIPricing(pricingPayload, ratioConfigPayload = null, codex
       vendor_count: vendorNames.size,
       min_model_rate: ratioValues.length ? Math.min(...ratioValues) : null,
       max_model_rate: ratioValues.length ? Math.max(...ratioValues) : null,
-      codex_model_count: codexItems.length,
-      codex_min_rate: codexItems.length
-        ? Math.min(...codexItems.map((item) => item.quota_type === 1 ? item.model_price : item.model_ratio).filter(Number.isFinite))
-        : null,
+      ...platformSummary,
       pricing_version: pricingVersion,
       group_ratio: groupRatio
     },
@@ -578,7 +556,7 @@ function normalizeNewAPIPricing(pricingPayload, ratioConfigPayload = null, codex
   };
 }
 
-async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases }) {
+async function fetchNewAPIState({ baseUrl, email, password, token }) {
   if (token && (!email || !password)) {
     throw new Error('New API user data requires account/password login because user endpoints require a session and New-Api-User header');
   }
@@ -613,13 +591,12 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
   const profile = results.profile || login.user || {};
   const quotaUnit = newAPIQuotaUnit(results.status || {});
   const rates = normalizeNewAPIRates(results.groups, results.ratioConfig);
-  const codexRates = rates.filter((item) => matchesAnyAlias(item, codexAliases));
+  const platformRates = summarizePlatformRates(rates);
   const allRateValues = rates.map((item) => item.rate).filter(Number.isFinite);
-  const codexRate = codexRates.length ? Math.min(...codexRates.map((item) => item.rate)) : null;
   const keyItems = normalizeNewAPITokens(results.keys);
   const usage = normalizeNewAPIUsage(profile, results.totalStats, results.todayStats, results.weekStats, results.monthStats, quotaUnit);
   const subscription = normalizeNewAPISubscription(results.subscriptionSelf, results.subscriptionPlans, quotaUnit);
-  const pricing = normalizeNewAPIPricing(results.pricing, results.ratioConfig, codexAliases);
+  const pricing = normalizeNewAPIPricing(results.pricing, results.ratioConfig);
   const payment = {
     enabled: false,
     balance_recharge_disabled: true,
@@ -668,7 +645,9 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
       month_requests: 0,
       month_tokens: 0,
       month_cost: usage.month_cost,
-      codex_rate: codexRate,
+      codex_rate: null,
+      openai_rate: platformRates.openai_rate,
+      anthropic_rate: platformRates.anthropic_rate,
       min_rate: allRateValues.length ? Math.min(...allRateValues) : null,
       max_rate: allRateValues.length ? Math.max(...allRateValues) : null,
       payment_enabled: 0,
@@ -687,7 +666,7 @@ async function fetchNewAPIState({ baseUrl, email, password, token, codexAliases 
   };
 }
 
-async function fetchSub2APICompatibleState({ baseUrl, email, password, token, codexAliases }) {
+async function fetchSub2APICompatibleState({ baseUrl, email, password, token }) {
   let activeToken = token;
   let login = null;
   if (!activeToken) {
@@ -747,12 +726,11 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
     rates = keyItems.flatMap((key) => key.group ? flattenRateEntry(key.group) : []);
   }
 
-  const codexRates = rates.filter((item) => matchesAnyAlias(item, codexAliases));
+  const platformRates = summarizePlatformRates(rates);
   const allRateValues = rates.map((item) => item.rate).filter(Number.isFinite);
-  const codexRate = codexRates.length ? Math.min(...codexRates.map((item) => item.rate)) : null;
   const payment = normalizePaymentInfo(results.paymentCheckout, results.paymentConfig, results.paymentPlans);
   const subscription = { enabled: false, billing_preference: '', active_count: 0, total_count: 0, primary: null, subscriptions: [] };
-  const pricing = { summary: { enabled: false, source: '', model_count: 0, vendor_count: 0, min_model_rate: null, max_model_rate: null, codex_model_count: 0, codex_min_rate: null, pricing_version: '' }, items: [] };
+  const pricing = { summary: { enabled: false, source: '', model_count: 0, vendor_count: 0, min_model_rate: null, max_model_rate: null, openai_model_count: 0, openai_min_rate: null, anthropic_model_count: 0, anthropic_min_rate: null, pricing_version: '' }, items: [] };
 
   return {
     token: activeToken,
@@ -781,7 +759,9 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, co
       month_requests: monthUsage.requests,
       month_tokens: monthUsage.tokens,
       month_cost: monthUsage.cost,
-      codex_rate: codexRate,
+      codex_rate: null,
+      openai_rate: platformRates.openai_rate,
+      anthropic_rate: platformRates.anthropic_rate,
       min_rate: allRateValues.length ? Math.min(...allRateValues) : null,
       max_rate: allRateValues.length ? Math.max(...allRateValues) : null,
       payment_enabled: payment.enabled ? 1 : 0,

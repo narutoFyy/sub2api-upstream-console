@@ -2,7 +2,7 @@ const db = require('./db');
 const { encryptSecret, decryptSecret, maskSecret } = require('./crypto');
 const config = require('./config');
 const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
-const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard, isSub2APIPricingSite, resolveOfficialPricingRows } = require('./modelPricing');
+const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard, isSub2APIPricingSite, resolveOfficialPricingRows, summarizePlatformRates } = require('./modelPricing');
 const { normalizeSub2APIKey } = require('./upstreamKeys');
 
 function rowToSite(row) {
@@ -35,12 +35,42 @@ function rowToSite(row) {
   };
 }
 
+function latestRatesForSite(siteId, limit = 500) {
+  const rows = db.prepare(`
+    SELECT group_id, group_name, scope, model, rate
+    FROM group_rate_snapshots
+    WHERE upstream_site_id = ?
+    ORDER BY captured_at DESC, id DESC
+  `).all(siteId);
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = `${row.group_id}:${row.group_name}:${row.scope}:${row.model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function attachPlatformRates(site) {
+  if (!site) return site;
+  if (site.openai_rate != null || site.anthropic_rate != null) return site;
+  const platformRates = summarizePlatformRates(latestRatesForSite(site.id));
+  return {
+    ...site,
+    openai_rate: platformRates.openai_rate,
+    anthropic_rate: platformRates.anthropic_rate
+  };
+}
+
 function listSites() {
   return db.prepare(`
     SELECT s.*, c.captured_at, c.balance, c.balance_currency, c.today_tokens, c.today_cost,
            c.today_requests, c.week_tokens, c.week_cost, c.month_tokens, c.month_cost,
            c.total_requests, c.total_tokens, c.total_cost,
-           c.codex_rate, c.min_rate, c.max_rate,
+           c.codex_rate, c.openai_rate, c.anthropic_rate, c.min_rate, c.max_rate,
            c.payment_enabled, c.balance_recharge_disabled, c.balance_recharge_multiplier,
            c.recharge_fee_rate, c.payment_plan_count, c.payment_methods,
            c.subscription_summary, c.pricing_summary,
@@ -48,7 +78,7 @@ function listSites() {
     FROM upstream_sites s
     LEFT JOIN upstream_current_snapshots c ON c.upstream_site_id = s.id
     ORDER BY s.id DESC
-  `).all().map(rowToSite);
+  `).all().map(rowToSite).map(attachPlatformRates);
 }
 
 function getSite(id) {
@@ -81,11 +111,11 @@ function createSite(input) {
   const now = nowIso();
   const insertSite = db.prepare(`
     INSERT INTO upstream_sites (
-      name, base_url, upstream_type, auth_mode, status, tags, notes, codex_aliases,
+      name, base_url, upstream_type, auth_mode, status, tags, notes,
       low_balance_threshold, rate_change_threshold_percent, sync_interval_seconds, created_at, updated_at
     )
     VALUES (
-      @name, @base_url, @upstream_type, @auth_mode, 'active', @tags, @notes, @codex_aliases,
+      @name, @base_url, @upstream_type, @auth_mode, 'active', @tags, @notes,
       @low_balance_threshold, @rate_change_threshold_percent, @sync_interval_seconds, @now, @now
     )
   `);
@@ -97,7 +127,6 @@ function createSite(input) {
       auth_mode: input.auth_mode || 'password',
       tags: safeJson(input.tags || []),
       notes: input.notes || '',
-      codex_aliases: safeJson(input.codex_aliases || ['codex']),
       low_balance_threshold: input.low_balance_threshold ?? 10,
       rate_change_threshold_percent: input.rate_change_threshold_percent ?? 20,
       sync_interval_seconds: input.sync_interval_seconds || 180,
@@ -124,7 +153,6 @@ function updateSite(id, input) {
     status: input.status ?? site.status,
     tags: safeJson(input.tags ?? site.tags),
     notes: input.notes ?? site.notes,
-    codex_aliases: safeJson(input.codex_aliases ?? site.codex_aliases ?? ['codex']),
     low_balance_threshold: input.low_balance_threshold ?? site.low_balance_threshold ?? 10,
     rate_change_threshold_percent: input.rate_change_threshold_percent ?? site.rate_change_threshold_percent ?? 20,
     sync_interval_seconds: input.sync_interval_seconds ?? site.sync_interval_seconds,
@@ -135,7 +163,7 @@ function updateSite(id, input) {
     db.prepare(`
       UPDATE upstream_sites
       SET name=@name, base_url=@base_url, upstream_type=@upstream_type, auth_mode=@auth_mode, status=@status, tags=@tags,
-          notes=@notes, codex_aliases=@codex_aliases, low_balance_threshold=@low_balance_threshold,
+          notes=@notes, low_balance_threshold=@low_balance_threshold,
           rate_change_threshold_percent=@rate_change_threshold_percent,
           sync_interval_seconds=@sync_interval_seconds, updated_at=@now
       WHERE id=@id
@@ -191,14 +219,14 @@ function saveSyncSuccess(siteId, result) {
         upstream_site_id, balance, balance_currency, username, email, role,
         total_requests, today_requests, total_tokens, today_tokens, total_cost, today_cost,
         week_requests, week_tokens, week_cost, month_requests, month_tokens, month_cost,
-        codex_rate, min_rate, max_rate, payment_enabled, balance_recharge_disabled,
+        codex_rate, openai_rate, anthropic_rate, min_rate, max_rate, payment_enabled, balance_recharge_disabled,
         balance_recharge_multiplier, recharge_fee_rate, payment_plan_count, payment_methods,
         subscription_summary, pricing_summary, group_count, key_count, channel_count, raw_payload, captured_at
       ) VALUES (
         @siteId, @balance, @balance_currency, @username, @email, @role,
         @total_requests, @today_requests, @total_tokens, @today_tokens, @total_cost, @today_cost,
         @week_requests, @week_tokens, @week_cost, @month_requests, @month_tokens, @month_cost,
-        @codex_rate, @min_rate, @max_rate, @payment_enabled, @balance_recharge_disabled,
+        @codex_rate, @openai_rate, @anthropic_rate, @min_rate, @max_rate, @payment_enabled, @balance_recharge_disabled,
         @balance_recharge_multiplier, @recharge_fee_rate, @payment_plan_count, @payment_methods,
         @subscription_summary, @pricing_summary, @group_count, @key_count, @channel_count, @raw_payload, @now
       )
@@ -206,6 +234,7 @@ function saveSyncSuccess(siteId, result) {
         balance=@balance, balance_currency=@balance_currency, username=@username, email=@email, role=@role,
         total_requests=@total_requests, today_requests=@today_requests, total_tokens=@total_tokens,
         today_tokens=@today_tokens, total_cost=@total_cost, today_cost=@today_cost, codex_rate=@codex_rate,
+        openai_rate=@openai_rate, anthropic_rate=@anthropic_rate,
         week_requests=@week_requests, week_tokens=@week_tokens, week_cost=@week_cost,
         month_requests=@month_requests, month_tokens=@month_tokens, month_cost=@month_cost,
         min_rate=@min_rate, max_rate=@max_rate, group_count=@group_count, key_count=@key_count,
@@ -226,13 +255,13 @@ function saveSyncSuccess(siteId, result) {
     db.prepare(`
       INSERT INTO upstream_snapshot_history (
         upstream_site_id, balance, balance_currency, total_requests, today_requests,
-        total_tokens, today_tokens, total_cost, today_cost, codex_rate, min_rate,
+        total_tokens, today_tokens, total_cost, today_cost, codex_rate, openai_rate, anthropic_rate, min_rate,
         week_requests, week_tokens, week_cost, month_requests, month_tokens, month_cost,
         max_rate, payment_enabled, balance_recharge_disabled, balance_recharge_multiplier,
         recharge_fee_rate, payment_plan_count, payment_methods, group_count, key_count, channel_count, captured_at
       ) VALUES (
         @siteId, @balance, @balance_currency, @total_requests, @today_requests,
-        @total_tokens, @today_tokens, @total_cost, @today_cost, @codex_rate, @min_rate,
+        @total_tokens, @today_tokens, @total_cost, @today_cost, @codex_rate, @openai_rate, @anthropic_rate, @min_rate,
         @week_requests, @week_tokens, @week_cost, @month_requests, @month_tokens, @month_cost,
         @max_rate, @payment_enabled, @balance_recharge_disabled, @balance_recharge_multiplier,
         @recharge_fee_rate, @payment_plan_count, @payment_methods, @group_count, @key_count, @channel_count, @now
@@ -385,7 +414,15 @@ function saveSyncLog(siteId, syncType, startedAt, status, error, summary = '') {
 }
 
 function getSnapshot(siteId) {
-  return db.prepare('SELECT * FROM upstream_current_snapshots WHERE upstream_site_id = ?').get(siteId) || null;
+  const snapshot = db.prepare('SELECT * FROM upstream_current_snapshots WHERE upstream_site_id = ?').get(siteId) || null;
+  if (!snapshot) return null;
+  if (snapshot.openai_rate != null || snapshot.anthropic_rate != null) return snapshot;
+  const platformRates = summarizePlatformRates(latestRatesForSite(siteId));
+  return {
+    ...snapshot,
+    openai_rate: platformRates.openai_rate,
+    anthropic_rate: platformRates.anthropic_rate
+  };
 }
 
 function listSnapshotHistory(siteId, limit = 120) {
@@ -472,8 +509,10 @@ function getDetailPricingSummary(siteId) {
     vendor_count: families.size,
     min_model_rate: ratios.length ? Math.min(...ratios) : null,
     max_model_rate: ratios.length ? Math.max(...ratios) : null,
-    codex_model_count: 0,
-    codex_min_rate: null,
+    openai_model_count: 0,
+    openai_min_rate: null,
+    anthropic_model_count: 0,
+    anthropic_min_rate: null,
     pricing_version: ''
   };
 }

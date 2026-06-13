@@ -23,8 +23,7 @@ async function syncSite(siteId) {
       upstreamType: site.upstream_type || 'auto',
       email: creds.email,
       password: creds.password,
-      token: creds.token,
-      codexAliases: site.codex_aliases
+      token: creds.token
     });
     repo.saveSyncSuccess(siteId, result);
     repo.saveSyncLog(

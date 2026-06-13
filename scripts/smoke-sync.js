@@ -21,7 +21,8 @@ async function main() {
     balance: result.snapshot.balance,
     today_tokens: result.snapshot.today_tokens,
     rates: result.rates.length,
-    codex_rate: result.snapshot.codex_rate
+    openai_rate: result.snapshot.openai_rate,
+    anthropic_rate: result.snapshot.anthropic_rate
   }, null, 2));
 }
 

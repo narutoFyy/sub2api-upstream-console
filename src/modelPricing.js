@@ -202,6 +202,39 @@ function rateFamily(rate) {
   return 'other';
 }
 
+function summarizePlatformRates(rates = []) {
+  const openaiRates = [];
+  const anthropicRates = [];
+  for (const rate of rates) {
+    const value = finiteNumber(rate?.rate);
+    if (value === null) continue;
+    const family = rateFamily(rate);
+    if (family === 'openai') openaiRates.push(value);
+    else if (family === 'claude') anthropicRates.push(value);
+  }
+  return {
+    openai_rate: openaiRates.length ? Math.min(...openaiRates) : null,
+    anthropic_rate: anthropicRates.length ? Math.min(...anthropicRates) : null
+  };
+}
+
+function summarizePlatformPricing(items = []) {
+  const openaiItems = items.filter((item) => modelFamily(item) === 'openai');
+  const anthropicItems = items.filter((item) => modelFamily(item) === 'claude');
+  const pickMinRate = (list) => {
+    const values = list
+      .map((item) => (Number(item.quota_type || 0) === 1 ? finiteNumber(item.model_price) : finiteNumber(item.model_ratio)))
+      .filter((value) => value !== null);
+    return values.length ? Math.min(...values) : null;
+  };
+  return {
+    openai_model_count: openaiItems.length,
+    openai_min_rate: pickMinRate(openaiItems),
+    anthropic_model_count: anthropicItems.length,
+    anthropic_min_rate: pickMinRate(anthropicItems)
+  };
+}
+
 function scaleOfficialPriceRow(official, rateRow) {
   const ratio = finiteNumber(rateRow.rate);
   if (ratio === null) return null;
@@ -326,5 +359,8 @@ module.exports = {
   modelFamily,
   parseJsonArray,
   parseJsonObject,
-  resolveOfficialPricingRows
+  rateFamily,
+  resolveOfficialPricingRows,
+  summarizePlatformPricing,
+  summarizePlatformRates
 };

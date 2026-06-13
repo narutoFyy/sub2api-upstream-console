@@ -285,6 +285,8 @@ ensureColumn('upstream_current_snapshots', 'payment_plan_count', 'INTEGER NOT NU
 ensureColumn('upstream_current_snapshots', 'payment_methods', `TEXT NOT NULL DEFAULT '[]'`);
 ensureColumn('upstream_current_snapshots', 'subscription_summary', `TEXT NOT NULL DEFAULT '{}'`);
 ensureColumn('upstream_current_snapshots', 'pricing_summary', `TEXT NOT NULL DEFAULT '{}'`);
+ensureColumn('upstream_current_snapshots', 'openai_rate', 'REAL');
+ensureColumn('upstream_current_snapshots', 'anthropic_rate', 'REAL');
 ensureColumn('upstream_snapshot_history', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'week_cost', 'REAL NOT NULL DEFAULT 0');
@@ -292,6 +294,8 @@ ensureColumn('upstream_snapshot_history', 'month_requests', 'INTEGER NOT NULL DE
 ensureColumn('upstream_snapshot_history', 'month_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'month_cost', 'REAL NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'channel_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_snapshot_history', 'openai_rate', 'REAL');
+ensureColumn('upstream_snapshot_history', 'anthropic_rate', 'REAL');
 ensureColumn('upstream_snapshot_history', 'payment_enabled', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'balance_recharge_disabled', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_snapshot_history', 'balance_recharge_multiplier', 'REAL');

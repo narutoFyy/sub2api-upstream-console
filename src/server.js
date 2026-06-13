@@ -128,9 +128,6 @@ function sanitizeSitePayload(payload, { partial = false } = {}) {
   if ('tags' in next || !partial) {
     next.tags = parseList(next.tags);
   }
-  if ('codex_aliases' in next || !partial) {
-    next.codex_aliases = parseList(next.codex_aliases, ['codex']);
-  }
   if ('low_balance_threshold' in next || !partial) {
     next.low_balance_threshold = Number(next.low_balance_threshold ?? 10);
   }
@@ -154,7 +151,6 @@ const siteSchema = z.object({
   password: z.string().optional().default(''),
   token: z.string().optional().default(''),
   tags: z.array(z.string()).optional().default([]),
-  codex_aliases: z.array(z.string()).optional().default(['codex']),
   notes: z.string().optional().default(''),
   low_balance_threshold: z.number().min(0).max(100000000).optional().default(10),
   rate_change_threshold_percent: z.number().min(0).max(100000).optional().default(20),
@@ -170,7 +166,6 @@ const siteUpdateSchema = z.object({
   password: z.string().optional(),
   token: z.string().optional(),
   tags: z.array(z.string()).optional(),
-  codex_aliases: z.array(z.string()).optional(),
   notes: z.string().optional(),
   low_balance_threshold: z.number().min(0).max(100000000).optional(),
   rate_change_threshold_percent: z.number().min(0).max(100000).optional(),
@@ -334,8 +329,7 @@ app.post('/api/upstreams/test', async (req, res, next) => {
       upstreamType: payload.upstream_type,
       email: payload.email,
       password: payload.password,
-      token: payload.token,
-      codexAliases: payload.codex_aliases
+      token: payload.token
     });
     res.json({
       ok: true,

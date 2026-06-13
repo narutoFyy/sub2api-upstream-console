@@ -176,7 +176,6 @@ function getFormPayload() {
   const form = document.querySelector('#upstreamForm');
   const payload = Object.fromEntries(new FormData(form).entries());
   payload.tags = parseList(payload.tags);
-  payload.codex_aliases = parseList(payload.codex_aliases || 'codex');
   payload.low_balance_threshold = Number(payload.low_balance_threshold || 10);
   payload.rate_change_threshold_percent = Number(payload.rate_change_threshold_percent || 20);
   payload.sync_interval_seconds = Number(payload.sync_interval_seconds || 180);
@@ -194,7 +193,6 @@ function setForm(site = null, credentials = {}) {
   form.password.value = '';
   form.token.value = '';
   form.tags.value = (site?.tags || []).join(',');
-  form.codex_aliases.value = (site?.codex_aliases || ['codex']).join(',');
   form.low_balance_threshold.value = site?.low_balance_threshold ?? 10;
   form.rate_change_threshold_percent.value = site?.rate_change_threshold_percent ?? 20;
   form.sync_interval_seconds.value = site?.sync_interval_seconds ?? 180;
@@ -202,7 +200,7 @@ function setForm(site = null, credentials = {}) {
   document.querySelector('#formTitle').textContent = site ? `编辑上游：${site.name}` : '新增上游';
   document.querySelector('#formMessage').textContent = site
     ? '正在编辑已有上游。密码或 Token 留空时会保留原凭证。'
-    : '站点标签只是给你自己分类；Codex 倍率识别词用于自动判断哪些分组属于 Codex。';
+    : '站点标签只是给你自己分类；OpenAI / Anthropic 倍率会按 Sub2API 分组平台自动识别。';
 }
 
 function showMessage(text, tone = '') {
@@ -336,7 +334,8 @@ function renderRows() {
         <td>${tokenText(site.today_tokens)}</td>
         <td>${money.format(site.today_cost || 0)}</td>
         <td>${escapeHtml(subscriptionCountText(site))}</td>
-        <td>${rateText(site.codex_rate)}</td>
+        <td>${rateText(site.openai_rate)}</td>
+        <td>${rateText(site.anthropic_rate)}</td>
         <td>${rateText(site.min_rate)} - ${rateText(site.max_rate)}</td>
         <td>
           <div>${timeText(site.last_sync_at)}</div>
@@ -353,7 +352,7 @@ function renderRows() {
       </tr>
     `;
   }).join('');
-  document.querySelector('#upstreamRows').innerHTML = rows || '<tr><td colspan="11" class="empty">还没有匹配的上游。</td></tr>';
+  document.querySelector('#upstreamRows').innerHTML = rows || '<tr><td colspan="12" class="empty">还没有匹配的上游。</td></tr>';
 }
 
 function renderRateChanges(changes) {
@@ -824,8 +823,11 @@ function renderModelPricingPanel(detail) {
   const rangeText = Number.isFinite(Number(summary.min_model_rate)) && Number.isFinite(Number(summary.max_model_rate))
     ? `${rateText(summary.min_model_rate)} - ${rateText(summary.max_model_rate)}`
     : '按分组换算';
-  const codexMinText = Number.isFinite(Number(summary.codex_min_rate))
-    ? rateText(summary.codex_min_rate)
+  const openaiMinText = Number.isFinite(Number(summary.openai_min_rate))
+    ? rateText(summary.openai_min_rate)
+    : '-';
+  const anthropicMinText = Number.isFinite(Number(summary.anthropic_min_rate))
+    ? rateText(summary.anthropic_min_rate)
     : '-';
   return `
     <h3 id="modelPricingSection">模型广场价格</h3>
@@ -833,8 +835,8 @@ function renderModelPricingPanel(detail) {
       <article class="metric"><span>模型数量</span><strong>${Number(summary.model_count || items.length)}</strong></article>
       <article class="metric"><span>供应商数量</span><strong>${Number(summary.vendor_count || 0)}</strong></article>
       <article class="metric"><span>倍率范围</span><strong>${escapeHtml(rangeText)}</strong></article>
-      <article class="metric"><span>Codex 模型</span><strong>${Number(summary.codex_model_count || 0)}</strong></article>
-      <article class="metric"><span>Codex 最低</span><strong>${escapeHtml(codexMinText)}</strong></article>
+      <article class="metric"><span>OpenAI 最低</span><strong>${escapeHtml(openaiMinText)}</strong></article>
+      <article class="metric"><span>Anthropic 最低</span><strong>${escapeHtml(anthropicMinText)}</strong></article>
       <article class="metric"><span>数据来源</span><strong>${escapeHtml(summary.source || 'pricing')}</strong></article>
     </div>
     ${summary.pricing_version ? `<p class="detail-note">模型广场版本：${escapeHtml(summary.pricing_version)}</p>` : ''}
@@ -869,6 +871,8 @@ function renderDetail(detail) {
       <article class="metric"><span>Key 数量</span><strong>${snapshot.key_count || 0}</strong></article>
       <article class="metric"><span>渠道数量</span><strong>${snapshot.channel_count || 0}</strong></article>
       <article class="metric"><span>倍率范围</span><strong>${rateText(snapshot.min_rate)} - ${rateText(snapshot.max_rate)}</strong></article>
+      <article class="metric"><span>OpenAI 倍率</span><strong>${rateText(snapshot.openai_rate)}</strong></article>
+      <article class="metric"><span>Anthropic 倍率</span><strong>${rateText(snapshot.anthropic_rate)}</strong></article>
       <article class="metric"><span>模型广场</span><strong>${Number(parsePricingSummary(snapshot).model_count || 0)}</strong></article>
     </div>
     ${rechargeMetaText(snapshot) ? `<p class="detail-note">${escapeHtml(rechargeMetaText(snapshot))}</p>` : ''}
