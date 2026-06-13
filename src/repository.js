@@ -2,7 +2,7 @@ const db = require('./db');
 const { encryptSecret, decryptSecret, maskSecret } = require('./crypto');
 const config = require('./config');
 const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
-const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard } = require('./modelPricing');
+const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard, isSub2APIPricingSite, resolveOfficialPricingRows } = require('./modelPricing');
 const { normalizeSub2APIKey } = require('./upstreamKeys');
 
 function rowToSite(row) {
@@ -435,7 +435,7 @@ function listModelPricing(siteId, limit = 300) {
   if (out.length > 0) return out;
 
   const site = getSite(siteId);
-  if (!site || site.upstream_type !== 'sub2api') return out;
+  if (!isSub2APIPricingSite(site)) return out;
   const generated = buildSub2APISiteModelPricing(listAllModelPricing(5000), listLatestRatesForBoard(5000)).get(siteId) || [];
   const deduped = [];
   const generatedSeen = new Set();
@@ -459,7 +459,7 @@ function getDetailPricingSummary(siteId) {
   if (summary?.enabled) return summary;
 
   const site = getSite(siteId);
-  if (!site || site.upstream_type !== 'sub2api') return summary;
+  if (!isSub2APIPricingSite(site)) return summary;
   const items = buildSub2APISiteModelPricing(listAllModelPricing(5000), listLatestRatesForBoard(5000)).get(siteId) || [];
   if (!items.length) return summary;
 
@@ -494,7 +494,7 @@ function listAllModelPricing(limit = 1000) {
     out.push(row);
     if (out.length >= limit) break;
   }
-  return out;
+  return resolveOfficialPricingRows(out);
 }
 
 function listLatestRatesForBoard(limit = 1000) {

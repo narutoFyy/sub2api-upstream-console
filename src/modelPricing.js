@@ -24,6 +24,42 @@ const BOARD_MODEL_ORDER = {
   ]
 };
 
+// 无 new-api /pricing 快照时，用内置官方基准价叠加上游分组倍率。
+const BUILTIN_OFFICIAL_MODELS = [
+  { model_name: 'gpt-5.5', vendor: 'OpenAI', quota_type: 0, official_input_usd_per_1m: 5, official_output_usd_per_1m: 15, source: 'builtin' },
+  { model_name: 'gpt-5.4', vendor: 'OpenAI', quota_type: 0, official_input_usd_per_1m: 4, official_output_usd_per_1m: 12, source: 'builtin' },
+  { model_name: 'claude-opus-4-8', vendor: 'Anthropic', quota_type: 0, official_input_usd_per_1m: 15, official_output_usd_per_1m: 75, source: 'builtin' },
+  { model_name: 'claude-opus-4-7', vendor: 'Anthropic', quota_type: 0, official_input_usd_per_1m: 15, official_output_usd_per_1m: 75, source: 'builtin' },
+  { model_name: 'claude-opus-4-6', vendor: 'Anthropic', quota_type: 0, official_input_usd_per_1m: 15, official_output_usd_per_1m: 75, source: 'builtin' },
+  { model_name: 'claude-sonnet-4-6', vendor: 'Anthropic', quota_type: 0, official_input_usd_per_1m: 3, official_output_usd_per_1m: 15, source: 'builtin' },
+  { model_name: 'claude-fable-5', vendor: 'Anthropic', quota_type: 0, official_input_usd_per_1m: 2, official_output_usd_per_1m: 10, source: 'builtin' }
+];
+
+function isSub2APIPricingUpstreamType(upstreamType) {
+  const type = String(upstreamType || 'auto').toLowerCase();
+  return type === 'sub2api' || type === 'auto';
+}
+
+function isSub2APIPricingSite(site) {
+  if (!site) return false;
+  return isSub2APIPricingUpstreamType(site.upstream_type);
+}
+
+function getBuiltinOfficialModels() {
+  return BUILTIN_OFFICIAL_MODELS.map((item) => ({ ...item }));
+}
+
+function resolveOfficialPricingRows(rows = []) {
+  const byModel = new Map();
+  for (const row of getBuiltinOfficialModels()) {
+    byModel.set(row.model_name, row);
+  }
+  for (const row of rows) {
+    if (row?.model_name) byModel.set(row.model_name, row);
+  }
+  return [...byModel.values()];
+}
+
 function finiteNumber(value, fallback = null) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -194,8 +230,9 @@ function scaleOfficialPriceRow(official, rateRow) {
 }
 
 function mergeSub2APIRows(rows = [], rateRows = []) {
+  const officialRows = resolveOfficialPricingRows(rows);
   const officialByModel = new Map();
-  for (const row of rows) {
+  for (const row of officialRows) {
     const family = modelFamily(row);
     if (family === 'other') continue;
     const modelName = row.model_name || '';
@@ -205,7 +242,7 @@ function mergeSub2APIRows(rows = [], rateRows = []) {
 
   const extraRows = [];
   for (const rateRow of rateRows) {
-    if ((rateRow.upstream_type || '') !== 'sub2api') continue;
+    if (!isSub2APIPricingUpstreamType(rateRow.upstream_type)) continue;
     const family = rateFamily(rateRow);
     if (family === 'other') continue;
     for (const official of officialByModel.values()) {
@@ -281,9 +318,13 @@ module.exports = {
   BOARD_WATCH_PATTERNS,
   buildSub2APISiteModelPricing,
   calculatePricingFields,
+  getBuiltinOfficialModels,
   groupModelPricingBoard,
+  isSub2APIPricingSite,
+  isSub2APIPricingUpstreamType,
   isWatchedBoardModel,
   modelFamily,
   parseJsonArray,
-  parseJsonObject
+  parseJsonObject,
+  resolveOfficialPricingRows
 };
