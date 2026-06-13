@@ -2,7 +2,7 @@
 
 一个独立的 Sub2API 上游聚合控制台，用来集中查看多个上游账号的余额、用量、倍率、充值比例和同步状态。
 
-当前版本：`v1.6.0`
+当前版本：`v1.7.0`
 
 ## 项目定位
 
@@ -84,6 +84,14 @@ http://localhost:4317
 - 支持 Sub2API `/api/v1` 与 `/api` 路径兜底。
 - 支持 QuantumNous/new-api 的 `/api/user/login`、`/api/user/self`、`/api/user/self/groups`、`/api/token/`、`/api/log/self/stat` 和 `/api/subscription/self` 等接口。
 
+### API Key 聚合管理
+
+- 跨上游查看所有 Sub2API Key 列表（名称、掩码、分组、平台、状态、配额、最后使用时间）。
+- 在本控制台直接创建 Key：选上游 → 选分组（OpenAI / Anthropic 等）→ 填名称即可。
+- 创建成功后一次性展示完整 Key，支持复制；本地加密保存创建记录。
+- 支持启用/停用、删除 Key；上游详情页提供「在此上游创建 Key」快捷入口。
+- 模型价格广场仅展示重点监控模型（GPT-5.4/5.5、指定 Claude 型号）。
+
 ### 前端体验
 
 - 上游列表支持搜索、标签筛选、状态筛选和排序。
@@ -106,6 +114,15 @@ http://localhost:4317
 | `MAX_RATE_SNAPSHOTS` | `2000` | 每个上游保留的倍率快照数量 |
 
 ## 更新说明
+
+### v1.7.0 - 2026-06-13
+
+- 新增「API Key 管理」首页板块，跨上游查看、创建、启停和删除 Sub2API Key。
+- 新增 `src/upstreamKeys.js` 与 `/api/upstream-keys`、`/api/upstreams/:id/keys`、`/api/upstreams/:id/key-groups` 等接口。
+- 创建 Key 时通过分组下拉选择 OpenAI / Claude 等线路，无需逐个登录上游网站。
+- 新增 `upstream_api_key_snapshots` 和 `upstream_key_create_logs` 表，同步时保存 Key 快照，创建时加密保存完整密钥。
+- 模型价格广场增加监控白名单，OpenAI 仅展示 GPT-5.4 / GPT-5.5，Claude 仅展示指定型号。
+- 修复 `public/app.js` 编码损坏导致的页面白屏问题。
 
 ### v1.6.0 - 2026-06-10
 

@@ -1,6 +1,6 @@
 # Sub2API 上游聚合控制台代办清单
 
-更新时间：2026-06-08（已接入 Wei-Shaw/sub2api 统一支付接口）
+更新时间：2026-06-13（新增第九阶段：跨上游 API Key 聚合管理）
 
 ## 第一阶段：MVP 跑通一个真实上游
 
@@ -102,10 +102,11 @@
 
 ## 下一步推荐执行顺序
 
-1. 增加更精细的趋势图，例如按天聚合、按上游对比。
-2. 增加更多上游的真实兼容性测试样本。
-3. 增加控制台管理员账号创建和改密功能。
-4. 增加审计日志，记录凭证查看、修改和测试操作。
+1. **优先做第九阶段：跨上游 API Key 聚合管理**（查看、创建、选分组），减少逐个登录上游网站的成本。
+2. 增加更精细的趋势图，例如按天聚合、按上游对比。
+3. 增加更多上游的真实兼容性测试样本。
+4. 增加控制台管理员账号创建和改密功能。
+5. 增加审计日志，记录凭证查看、修改和测试操作。
 
 ## 第七阶段：充值与支付聚合
 
@@ -136,3 +137,76 @@
 - [x] 区分“上游分组倍率”和“模型官方倍率”：分组倍率用于账号/分组折扣，模型倍率用于具体模型价格，前端不能混成一个数展示。
 - [ ] 增加手动刷新按钮和后台定时同步；官方倍率变化时记录历史并提示“模型倍率变化”，类似当前分组倍率变化提醒。
 - [x] 在 README 中补充 NewAPI 模型广场能力说明，写清楚该功能依赖上游是否开放 `/api/pricing` 或 `/api/ratio_config`。
+
+## 第九阶段：跨上游 API Key 聚合管理
+
+> 目标：在本控制台统一查看、创建、切换分组和管理所有上游的 API Key，不必逐个打开上游网站。  
+> 原生 Sub2API 参考实现：`frontend/src/views/user/KeysView.vue`、`frontend/src/api/keys.ts`、`backend/internal/handler/api_key_handler.go`。
+
+### 原生 Sub2API 密钥创建机制（调研结论）
+
+用户在原生 Sub2API 的「API Keys」页创建密钥时，核心流程如下：
+
+1. **加载可用分组**：`GET /api/v1/groups/available`，返回当前账号可绑定的分组列表；每个分组包含 `id`、`name`、`description`、`rate_multiplier`、`subscription_type`、`platform`（如 `openai`、`anthropic`、`gemini` 等）。
+2. **加载用户专属倍率**：`GET /api/v1/groups/rates`，用于在下拉框里展示该用户实际生效的分组倍率。
+3. **创建密钥时必选分组**：前端 `KeysView.vue` 校验 `group_id` 不能为空；下拉框用 `GroupBadge` 展示分组名称、平台、订阅类型和倍率，支持搜索。
+4. **创建接口**：`POST /api/v1/keys`，请求体至少包含：
+   - `name`（必填）
+   - `group_id`（必填，决定 Key 走哪个 OpenAI/Claude 等分组线路）
+   - 可选：`custom_key`、`ip_whitelist`、`ip_blacklist`、`quota`、`expires_in_days`、`rate_limit_5h/1d/7d`
+5. **创建响应**：返回完整 Key 字符串（仅创建时明文返回一次），后续列表里只显示掩码。
+6. **列表与管理**：
+   - `GET /api/v1/keys?page=&page_size=&search=&status=&group_id=` 分页列表
+   - `PUT /api/v1/keys/:id` 可改名称、分组、状态、配额、过期时间等
+   - `DELETE /api/v1/keys/:id` 删除
+7. **分组决定模型线路，不是逐个选模型**：Key 绑定的是「分组」，分组本身已对应 OpenAI、Claude、Codex 等平台和倍率；用户通过选分组间接决定可用模型范围。
+
+当前控制台现状：同步时已能调用 Sub2API 的 `GET /api/v1/keys` 和 NewAPI 的 `GET /api/token/`，但只保存 `key_count`，没有 Key 列表快照，也没有创建/编辑/删除能力。
+
+### 后端 TODO
+
+- [x] 新增 `src/upstreamKeys.js` 适配层，统一 Sub2API 与 NewAPI 的 Key 读写接口（当前已实现 Sub2API；NewAPI 待补）。
+- [x] Sub2API 适配：复用现有登录 Token，封装 `listKeys`、`getKey`、`createKey`、`updateKey`、`deleteKey`、`listAvailableGroups`、`getUserGroupRates`。
+- [ ] NewAPI 适配：调研并实现 `/api/token/` 的创建/更新/删除接口（字段名与 Sub2API 不同，需单独映射）。
+- [x] 新增本地表 `upstream_api_key_snapshots`，保存每个上游最近一次同步到的 Key 列表（不含完整密钥明文，只存掩码、名称、分组、状态、配额、过期时间、最后使用时间）。
+- [x] 新增 `upstream_key_create_logs` 表，仅在本地控制台创建 Key 成功时记录一次完整密钥（加密存储），方便用户事后找回；需支持手动清除。
+- [x] 新增控制台 API：
+  - `GET /api/upstream-keys`：跨上游聚合 Key 列表，支持按上游、分组平台（OpenAI/Anthropic）、状态筛选。
+  - `GET /api/upstreams/:id/keys`：单上游 Key 列表（实时拉取或读快照）。
+  - `GET /api/upstreams/:id/key-groups`：单上游可绑定分组，供创建下拉框使用。
+  - `POST /api/upstreams/:id/keys`：代理创建 Key，请求体 `{ name, group_id, ... }`。
+  - `PUT /api/upstreams/:id/keys/:keyId`：代理更新 Key（改分组、启停、配额等）。
+  - `DELETE /api/upstreams/:id/keys/:keyId`：代理删除 Key。
+- [x] 创建成功后返回 `{ key, upstream_site_id, group_name, platform, created_at }`，前端弹窗一次性展示完整 Key 并提供复制。
+- [x] 上游不支持 Key 管理接口时，接口返回明确错误，不要假装成功。
+- [ ] 所有 Key 创建/修改/删除操作写审计日志。
+
+### 前端 TODO
+
+- [x] 新增首页「API Key 管理」区块，跨上游汇总展示所有 Key。
+- [x] 列表字段：上游名称、Key 名称、掩码、绑定分组、平台（OpenAI/Claude 等）、分组倍率、状态、配额/用量、过期时间、最后使用时间。
+- [x] 支持按上游、平台、分组、状态筛选；支持搜索 Key 名称。
+- [x] 新增「创建 Key」入口：
+  1. 先选上游（下拉）
+  2. 再选分组（从 `/key-groups` 拉取，展示分组名 + 平台 + 倍率，类似原生 `GroupBadge`）
+  3. 填写名称，可选配额、过期天数、自定义 Key 前缀
+  4. 提交后在弹窗一次性展示完整 Key，支持复制
+- [x] 在上游详情页增加「在此上游创建 Key」快捷按钮。
+- [x] 支持快捷操作：启停、删除（需二次确认）。
+- [x] 对 OpenAI / Anthropic 等常用场景，分组下拉支持按 `platform` 快捷筛选，例如「只看 OpenAI 分组」。
+- [x] 创建失败、分组为空、Token 失效等场景给出明确提示，并引导用户先同步或重新测试连接。
+
+### 兼容与安全
+
+- [x] 明确区分 Sub2API 与 NewAPI 的 Key 接口差异，能力矩阵增加 `keys_read`、`keys_create`、`keys_update`、`keys_delete` 四项。
+- [x] 前端永远不展示历史同步快照里的完整 Key；完整明文只在「刚创建成功」时显示一次。
+- [x] 若用户只用 API Key 模式接入上游、无法登录用户 JWT，则只读或不支持创建，页面需标注原因。
+- [x] 创建 Key 属于写操作，必须走控制台登录鉴权，并限制 SSRF 与重复提交。
+
+### 验收标准
+
+- [ ] 至少对一个 Sub2API 上游：能在本控制台看到 Key 列表、可用分组下拉，并成功创建绑定 OpenAI 分组的 Key。
+- [ ] 创建后无需打开上游网站，即可复制完整 Key 到 Claude Code / Codex / Cursor 使用。
+- [ ] 跨 2 个以上上游时，首页 Key 管理页能统一浏览、筛选和创建。
+- [ ] 上游不支持创建时，页面显示「该上游不支持在线创建 Key」，不影响其他上游。
+- [ ] 创建/删除/改分组后，同步日志和能力矩阵能反映最新 Key 数量。

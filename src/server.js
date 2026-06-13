@@ -7,6 +7,13 @@ const repo = require('./repository');
 const { seedFromEnv } = require('./seed');
 const { syncSite, syncAllSites, syncDueSites } = require('./syncService');
 const { createPaymentOrder, fetchSub2APIState, getPaymentOrder } = require('./upstreamClient');
+const {
+  listSub2APIKeys,
+  listSub2APIGroups,
+  createSub2APIKey,
+  updateSub2APIKey,
+  deleteSub2APIKey
+} = require('./upstreamKeys');
 
 const app = express();
 
@@ -179,6 +186,32 @@ const rechargeOrderSchema = z.object({
   is_mobile: z.boolean().optional().default(false),
   payment_source: z.string().min(1).optional().default('hosted_redirect')
 });
+
+const createUpstreamKeySchema = z.object({
+  name: z.string().min(1).max(100),
+  group_id: z.number().int().positive(),
+  custom_key: z.string().min(16).max(200).optional(),
+  quota: z.number().min(0).max(1000000).optional(),
+  expires_in_days: z.number().int().min(1).max(3650).optional()
+});
+
+const updateUpstreamKeySchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  group_id: z.number().int().positive().optional(),
+  status: z.enum(['active', 'inactive']).optional()
+});
+
+function getSiteCredentials(siteId) {
+  const site = repo.getSite(siteId);
+  if (!site) return null;
+  return { site, creds: repo.getCredentials(siteId) || {} };
+}
+
+function sanitizeUpstreamKey(item) {
+  if (!item) return item;
+  const { key_full, ...safe } = item;
+  return safe;
+}
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
@@ -407,6 +440,152 @@ app.get('/api/model-pricing', (req, res) => {
 
 app.get('/api/model-pricing/board', (req, res) => {
   res.json(repo.getModelPricingBoard());
+});
+
+app.get('/api/upstream-keys', async (req, res, next) => {
+  try {
+    const upstreamSiteId = req.query.upstream_site_id ? Number(req.query.upstream_site_id) : null;
+    const platform = String(req.query.platform || '').trim();
+    const status = String(req.query.status || '').trim();
+    const search = String(req.query.search || '').trim();
+    const live = req.query.live !== 'false';
+    const sites = repo.listSites().filter((site) => site.status !== 'disabled');
+    const targetSites = upstreamSiteId
+      ? sites.filter((site) => Number(site.id) === upstreamSiteId)
+      : sites;
+    const items = [];
+    const errors = [];
+    if (live) {
+      for (const site of targetSites) {
+        try {
+          const creds = repo.getCredentials(site.id) || {};
+          const result = await listSub2APIKeys(site, creds, {
+            page: 1,
+            pageSize: 100,
+            search,
+            status,
+            groupId: null
+          });
+          const filtered = platform
+            ? result.items.filter((item) => String(item.platform || '').toLowerCase() === platform.toLowerCase())
+            : result.items;
+          items.push(...filtered.map(sanitizeUpstreamKey));
+        } catch (err) {
+          errors.push({ upstream_site_id: site.id, upstream_name: site.name, error: err.message });
+        }
+      }
+    }
+    if (!items.length) {
+      const snapshots = repo.listAllKeySnapshots({
+        upstreamSiteId,
+        platform,
+        status,
+        search
+      }, 500);
+      items.push(...snapshots.map((row) => ({
+        upstream_site_id: row.upstream_site_id,
+        upstream_name: row.upstream_name,
+        base_url: row.base_url,
+        id: row.upstream_key_id,
+        name: row.name,
+        key_masked: row.key_masked,
+        group_id: row.group_id ? Number(row.group_id) : null,
+        group_name: row.group_name,
+        platform: row.platform,
+        status: row.status,
+        quota: row.quota,
+        quota_used: row.quota_used,
+        expires_at: row.expires_at,
+        last_used_at: row.last_used_at,
+        captured_at: row.captured_at,
+        source: 'snapshot'
+      })));
+    }
+    res.json({ items, errors, live });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/upstreams/:id/keys', async (req, res, next) => {
+  try {
+    const ctx = getSiteCredentials(Number(req.params.id));
+    if (!ctx) return res.status(404).json({ error: 'Not found' });
+    const result = await listSub2APIKeys(ctx.site, ctx.creds, {
+      page: Number(req.query.page || 1),
+      pageSize: Number(req.query.page_size || 100),
+      search: String(req.query.search || ''),
+      status: String(req.query.status || ''),
+      groupId: req.query.group_id ?? null
+    });
+    res.json({
+      items: result.items.map(sanitizeUpstreamKey),
+      total: result.total,
+      page: result.page,
+      page_size: result.page_size,
+      pages: result.pages
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/upstreams/:id/key-groups', async (req, res, next) => {
+  try {
+    const ctx = getSiteCredentials(Number(req.params.id));
+    if (!ctx) return res.status(404).json({ error: 'Not found' });
+    const platform = String(req.query.platform || '').trim().toLowerCase();
+    let groups = await listSub2APIGroups(ctx.site, ctx.creds);
+    if (platform) {
+      groups = groups.filter((group) => String(group.platform || '').toLowerCase() === platform);
+    }
+    res.json({ items: groups });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/upstreams/:id/keys', async (req, res, next) => {
+  try {
+    const ctx = getSiteCredentials(Number(req.params.id));
+    if (!ctx) return res.status(404).json({ error: 'Not found' });
+    const payload = createUpstreamKeySchema.parse(req.body || {});
+    const created = await createSub2APIKey(ctx.site, ctx.creds, payload);
+    repo.saveKeyCreateLog(ctx.site.id, created);
+    syncSite(ctx.site.id).catch((err) => console.error('Post key-create sync failed:', err));
+    res.status(201).json({
+      key: created.key_full,
+      item: sanitizeUpstreamKey(created),
+      message: 'Key 已创建。完整密钥只会在本次响应中返回一次，请立即复制保存。'
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put('/api/upstreams/:id/keys/:keyId', async (req, res, next) => {
+  try {
+    const ctx = getSiteCredentials(Number(req.params.id));
+    if (!ctx) return res.status(404).json({ error: 'Not found' });
+    const payload = updateUpstreamKeySchema.parse(req.body || {});
+    const updated = await updateSub2APIKey(ctx.site, ctx.creds, req.params.keyId, payload);
+    syncSite(ctx.site.id).catch((err) => console.error('Post key-update sync failed:', err));
+    res.json({ item: sanitizeUpstreamKey(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/upstreams/:id/keys/:keyId', async (req, res, next) => {
+  try {
+    const ctx = getSiteCredentials(Number(req.params.id));
+    if (!ctx) return res.status(404).json({ error: 'Not found' });
+    const result = await deleteSub2APIKey(ctx.site, ctx.creds, req.params.keyId);
+    syncSite(ctx.site.id).catch((err) => console.error('Post key-delete sync failed:', err));
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.post('/api/upstreams/:id/recharge-orders', async (req, res, next) => {

@@ -448,10 +448,75 @@ td {
 .list-item strong { display: block; margin-bottom: 4px; }
 .list-item small { color: var(--muted); }
 
-.empty {
-  color: var(--muted);
-  font-family: "Trebuchet MS", Verdana, sans-serif;
+.key-toolbar {
+  margin-bottom: 16px;
 }
+
+.key-dialog {
+  border: none;
+  border-radius: 28px;
+  padding: 0;
+  width: min(560px, calc(100vw - 32px));
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.25);
+}
+
+.key-dialog::backdrop {
+  background: rgba(8, 16, 24, 0.55);
+}
+
+.key-dialog-body {
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+}
+
+.key-dialog-body label {
+  display: grid;
+  gap: 8px;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.created-key-box {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.created-key-box code {
+  overflow-wrap: anywhere;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.key-platform-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(13, 107, 95, 0.12);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.key-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.key-actions button {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
 
 .detail-grid {
   display: grid;

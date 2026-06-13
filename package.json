@@ -1,6 +1,6 @@
 {
   "name": "sub2api-upstream-console",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Independent dashboard for aggregating upstream Sub2API account status.",
   "main": "src/server.js",
   "directories": {

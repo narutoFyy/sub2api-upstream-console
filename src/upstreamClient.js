@@ -885,5 +885,6 @@ module.exports = {
   loginWithPassword,
   requestJson,
   createPaymentOrder,
-  getPaymentOrder
+  getPaymentOrder,
+  getUpstreamToken
 };

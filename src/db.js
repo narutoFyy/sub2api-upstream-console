@@ -221,6 +221,42 @@ CREATE TABLE IF NOT EXISTS recharge_orders (
 );
 
 CREATE INDEX IF NOT EXISTS idx_recharge_orders_site_time ON recharge_orders(upstream_site_id, created_at);
+
+CREATE TABLE IF NOT EXISTS upstream_api_key_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upstream_site_id INTEGER NOT NULL,
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  key_masked TEXT NOT NULL DEFAULT '',
+  group_id TEXT NOT NULL DEFAULT '',
+  group_name TEXT NOT NULL DEFAULT '',
+  platform TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  quota REAL,
+  quota_used REAL,
+  expires_at TEXT,
+  last_used_at TEXT,
+  captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_upstream_api_key_snapshots_site ON upstream_api_key_snapshots(upstream_site_id, captured_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_upstream_api_key_snapshots_unique ON upstream_api_key_snapshots(upstream_site_id, upstream_key_id);
+
+CREATE TABLE IF NOT EXISTS upstream_key_create_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upstream_site_id INTEGER NOT NULL,
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  group_id TEXT NOT NULL DEFAULT '',
+  group_name TEXT NOT NULL DEFAULT '',
+  platform TEXT NOT NULL DEFAULT '',
+  encrypted_key TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_upstream_key_create_logs_site ON upstream_key_create_logs(upstream_site_id, created_at);
 `);
 
 function ensureColumn(table, column, definition) {

@@ -164,11 +164,120 @@
           <div id="detailContent"></div>
         </section>
 
+        <section class="panel" id="upstreamKeysPanel">
+          <div class="panel-title">
+            <div>
+              <h2>API Key 管理</h2>
+              <p>跨上游查看和创建 API Key。创建时选择分组即可决定 OpenAI / Claude 等线路，无需逐个登录上游网站。</p>
+            </div>
+            <div class="toolbar">
+              <button id="openCreateKeyBtn" class="primary" type="button">创建 Key</button>
+              <button id="refreshKeysBtn" class="ghost" type="button">刷新列表</button>
+            </div>
+          </div>
+          <div class="toolbar key-toolbar">
+            <select id="keyUpstreamFilter">
+              <option value="">全部上游</option>
+            </select>
+            <select id="keyPlatformFilter">
+              <option value="">全部平台</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic / Claude</option>
+              <option value="gemini">Gemini</option>
+              <option value="antigravity">Antigravity</option>
+            </select>
+            <select id="keyStatusFilter">
+              <option value="">全部状态</option>
+              <option value="active">启用</option>
+              <option value="inactive">停用</option>
+            </select>
+            <input id="keySearchInput" placeholder="搜索 Key 名称或分组" />
+          </div>
+          <div id="upstreamKeysErrors" class="notice" hidden></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>上游</th>
+                  <th>名称</th>
+                  <th>Key</th>
+                  <th>分组</th>
+                  <th>平台</th>
+                  <th>状态</th>
+                  <th>配额</th>
+                  <th>最后使用</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="upstreamKeyRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <dialog id="createKeyDialog" class="key-dialog">
+          <form id="createKeyForm" method="dialog" class="key-dialog-body">
+            <div class="panel-title">
+              <div>
+                <h2>创建上游 API Key</h2>
+                <p>先选上游，再选分组。分组决定该 Key 走 OpenAI、Claude 还是其他线路。</p>
+              </div>
+              <button type="button" id="closeCreateKeyBtn" class="ghost">关闭</button>
+            </div>
+            <label>上游
+              <select name="upstream_site_id" id="createKeyUpstreamSelect" required></select>
+            </label>
+            <label>分组
+              <select name="group_id" id="createKeyGroupSelect" required disabled>
+                <option value="">请先选择上游</option>
+              </select>
+            </label>
+            <label>Key 名称
+              <input name="name" required placeholder="例如：本地 Codex / Claude Code" />
+            </label>
+            <label>平台筛选（仅影响分组下拉）
+              <select id="createKeyPlatformFilter">
+                <option value="">全部分组</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic / Claude</option>
+                <option value="gemini">Gemini</option>
+                <option value="antigravity">Antigravity</option>
+              </select>
+            </label>
+            <label>配额 USD（可选，留空表示不限）
+              <input name="quota" type="number" min="0" step="0.01" placeholder="不限" />
+            </label>
+            <label>过期天数（可选）
+              <input name="expires_in_days" type="number" min="1" step="1" placeholder="永不过期" />
+            </label>
+            <p id="createKeyMessage" class="notice"></p>
+            <div class="form-actions">
+              <button type="submit" class="primary">创建 Key</button>
+            </div>
+          </form>
+        </dialog>
+
+        <dialog id="createdKeyDialog" class="key-dialog">
+          <div class="key-dialog-body">
+            <div class="panel-title">
+              <div>
+                <h2>Key 创建成功</h2>
+                <p>完整密钥只会显示这一次，请立即复制保存。</p>
+              </div>
+              <button type="button" id="closeCreatedKeyBtn" class="ghost">关闭</button>
+            </div>
+            <div class="created-key-box">
+              <code id="createdKeyValue"></code>
+              <button type="button" id="copyCreatedKeyBtn" class="secondary">复制 Key</button>
+            </div>
+            <p id="createdKeyMeta" class="detail-note"></p>
+          </div>
+        </dialog>
+
         <section class="panel">
           <div class="panel-title">
             <div>
               <h2>模型价格广场</h2>
-              <p>按 OpenAI 和 Claude 分区展示官方原价，并对比每个上游折算后的实际价格。</p>
+              <p>按 OpenAI 和 Claude 分区展示重点监控模型的官方原价，并对比各上游折算后的实际价格。OpenAI 仅展示 GPT-5.4 / GPT-5.5；Claude 仅展示 Opus 4-6/4-7/4-8、Sonnet 4-6、Fable 5。</p>
             </div>
           </div>
           <div id="modelPricingBoard" class="pricing-board"></div>

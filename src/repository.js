@@ -3,6 +3,7 @@ const { encryptSecret, decryptSecret, maskSecret } = require('./crypto');
 const config = require('./config');
 const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
 const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard } = require('./modelPricing');
+const { normalizeSub2APIKey } = require('./upstreamKeys');
 
 function rowToSite(row) {
   if (!row) return null;
@@ -260,6 +261,14 @@ function saveSyncSuccess(siteId, result) {
           `).run(siteId, rate.group_id, rate.group_name, old.rate, rate.rate, changePercent, now);
         }
       }
+    }
+
+    if (Array.isArray(result.keys)) {
+      saveKeySnapshots(siteId, result.keys.map((item) => normalizeSub2APIKey(item, {
+        siteId,
+        siteName: site.name,
+        baseUrl: site.base_url
+      })), now);
     }
 
     if (Array.isArray(result.model_pricing)) {
@@ -549,6 +558,7 @@ function listSyncLogs(siteId = null, limit = 100) {
 
 function capabilityMatrix(siteId) {
   const snapshot = getSnapshot(siteId);
+  const site = getSite(siteId);
   let subscriptionSummary = {};
   try {
     subscriptionSummary = JSON.parse(snapshot?.subscription_summary || '{}');
@@ -564,18 +574,115 @@ function capabilityMatrix(siteId) {
   const rates = listRates(siteId, 1);
   const logs = listSyncLogs(siteId, 20);
   const latestLog = logs[0];
+  const keySnapshots = listKeySnapshots(siteId, 1);
+  const canManageKeys = site && site.auth_mode !== 'api_key' && site.upstream_type !== 'new-api';
   return {
     login: latestLog?.status === 'success' || Boolean(snapshot),
     balance: snapshot?.balance !== null && snapshot?.balance !== undefined,
     usage: Boolean(snapshot && (snapshot.total_tokens || snapshot.total_requests || snapshot.today_tokens || snapshot.today_requests)),
     rates: rates.length > 0 || Number(snapshot?.group_count || 0) > 0,
-    keys: Number(snapshot?.key_count || 0) > 0,
+    keys: Number(snapshot?.key_count || 0) > 0 || keySnapshots.length > 0,
+    keys_read: canManageKeys || Number(snapshot?.key_count || 0) > 0,
+    keys_create: canManageKeys,
+    keys_update: canManageKeys,
+    keys_delete: canManageKeys,
     channels: Number(snapshot?.channel_count || 0) > 0,
     payment: Boolean(snapshot && Number(snapshot.payment_enabled) && !Number(snapshot.balance_recharge_disabled)),
     subscription: Boolean(subscriptionSummary?.enabled && subscriptionSummary?.active_count),
     pricing: Boolean(pricingSummary?.enabled && pricingSummary?.model_count),
     errors: latestLog?.status === 'failed' ? [latestLog.error_message] : []
   };
+}
+
+function saveKeySnapshots(siteId, keys, capturedAt = nowIso()) {
+  db.prepare('DELETE FROM upstream_api_key_snapshots WHERE upstream_site_id = ?').run(siteId);
+  const insert = db.prepare(`
+    INSERT INTO upstream_api_key_snapshots (
+      upstream_site_id, upstream_key_id, name, key_masked, group_id, group_name, platform,
+      status, quota, quota_used, expires_at, last_used_at, captured_at
+    ) VALUES (
+      @upstream_site_id, @upstream_key_id, @name, @key_masked, @group_id, @group_name, @platform,
+      @status, @quota, @quota_used, @expires_at, @last_used_at, @captured_at
+    )
+  `);
+  for (const key of keys) {
+    insert.run({
+      upstream_site_id: siteId,
+      upstream_key_id: String(key.id ?? ''),
+      name: key.name || '',
+      key_masked: key.key_masked || '',
+      group_id: String(key.group_id ?? ''),
+      group_name: key.group_name || '',
+      platform: key.platform || '',
+      status: key.status || '',
+      quota: key.quota ?? null,
+      quota_used: key.quota_used ?? null,
+      expires_at: key.expires_at || null,
+      last_used_at: key.last_used_at || null,
+      captured_at: capturedAt
+    });
+  }
+}
+
+function listKeySnapshots(siteId, limit = 200) {
+  return db.prepare(`
+    SELECT k.*, s.name AS upstream_name, s.base_url
+    FROM upstream_api_key_snapshots k
+    JOIN upstream_sites s ON s.id = k.upstream_site_id
+    WHERE k.upstream_site_id = ?
+    ORDER BY k.captured_at DESC, k.id DESC
+    LIMIT ?
+  `).all(siteId, limit);
+}
+
+function listAllKeySnapshots({ upstreamSiteId = null, platform = '', status = '', search = '' } = {}, limit = 500) {
+  const clauses = ['1=1'];
+  const params = [];
+  if (upstreamSiteId) {
+    clauses.push('k.upstream_site_id = ?');
+    params.push(upstreamSiteId);
+  }
+  if (platform) {
+    clauses.push('LOWER(k.platform) = ?');
+    params.push(String(platform).toLowerCase());
+  }
+  if (status) {
+    clauses.push('k.status = ?');
+    params.push(status);
+  }
+  if (search) {
+    clauses.push('(k.name LIKE ? OR k.group_name LIKE ? OR k.key_masked LIKE ?)');
+    const q = `%${search}%`;
+    params.push(q, q, q);
+  }
+  params.push(limit);
+  return db.prepare(`
+    SELECT k.*, s.name AS upstream_name, s.base_url
+    FROM upstream_api_key_snapshots k
+    JOIN upstream_sites s ON s.id = k.upstream_site_id
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY k.captured_at DESC, k.id DESC
+    LIMIT ?
+  `).all(...params);
+}
+
+function saveKeyCreateLog(siteId, key) {
+  const now = nowIso();
+  const result = db.prepare(`
+    INSERT INTO upstream_key_create_logs (
+      upstream_site_id, upstream_key_id, name, group_id, group_name, platform, encrypted_key, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    siteId,
+    String(key.id ?? ''),
+    key.name || '',
+    String(key.group_id ?? ''),
+    key.group_name || '',
+    key.platform || '',
+    encryptSecret(key.key_full || ''),
+    now
+  );
+  return db.prepare('SELECT * FROM upstream_key_create_logs WHERE id = ?').get(result.lastInsertRowid);
 }
 
 function saveRechargeOrder(siteId, order) {
@@ -685,5 +792,9 @@ module.exports = {
   getRechargeOrder,
   listRechargeOrders,
   exportSites,
-  pruneTelemetry
+  pruneTelemetry,
+  saveKeySnapshots,
+  listKeySnapshots,
+  listAllKeySnapshots,
+  saveKeyCreateLog
 };

@@ -1,6 +1,29 @@
 const OPENAI_HINTS = ['openai', 'gpt-', 'o1', 'o3', 'o4', 'chatgpt'];
 const CLAUDE_HINTS = ['claude', 'anthropic'];
 
+// 模型价格广场仅展示需要重点监控的模型，避免 GPT-4/o 系列等干扰对比。
+const BOARD_WATCH_PATTERNS = {
+  openai: ['gpt-5.4', 'gpt-5.5'],
+  claude: [
+    'claude-opus-4-6',
+    'claude-opus-4-7',
+    'claude-opus-4-8',
+    'claude-sonnet-4-6',
+    'claude-fable-5'
+  ]
+};
+
+const BOARD_MODEL_ORDER = {
+  openai: ['gpt-5.5', 'gpt-5.4'],
+  claude: [
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-4-6',
+    'claude-fable-5'
+  ]
+};
+
 function finiteNumber(value, fallback = null) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -109,6 +132,26 @@ function calculatePricingFields(model, groupRatioMap = {}) {
   };
 }
 
+function normalizeModelNameForMatch(name) {
+  return String(name || '').toLowerCase().replace(/^[^/]+\//, '');
+}
+
+function isWatchedBoardModel(family, modelName) {
+  const patterns = BOARD_WATCH_PATTERNS[family];
+  if (!patterns?.length) return true;
+  const normalized = normalizeModelNameForMatch(modelName);
+  return patterns.some((pattern) => normalized.includes(pattern));
+}
+
+function boardModelSortKey(family, modelName) {
+  const normalized = normalizeModelNameForMatch(modelName);
+  const order = BOARD_MODEL_ORDER[family] || [];
+  for (let i = 0; i < order.length; i += 1) {
+    if (normalized.includes(order[i])) return i;
+  }
+  return order.length;
+}
+
 function modelFamily(model) {
   const text = `${model.model_name || ''} ${model.vendor || ''} ${model.tags || ''}`.toLowerCase();
   if (CLAUDE_HINTS.some((hint) => text.includes(hint))) return 'claude';
@@ -196,7 +239,7 @@ function groupModelPricingBoard(rows = [], rateRows = []) {
     const family = modelFamily(row);
     if (!groups[family]) continue;
     const modelName = row.model_name || '';
-    if (!modelName) continue;
+    if (!modelName || !isWatchedBoardModel(family, modelName)) continue;
     if (!groups[family].has(modelName)) {
       groups[family].set(modelName, {
         model_name: modelName,
@@ -220,20 +263,26 @@ function groupModelPricingBoard(rows = [], rateRows = []) {
     return av - bv;
   });
 
-  const toArray = (map) => [...map.values()]
+  const toArray = (map, family) => [...map.values()]
     .map((item) => ({ ...item, upstreams: sortUpstreams(item.upstreams) }))
-    .sort((a, b) => a.model_name.localeCompare(b.model_name));
+    .sort((a, b) => {
+      const orderDiff = boardModelSortKey(family, a.model_name) - boardModelSortKey(family, b.model_name);
+      if (orderDiff !== 0) return orderDiff;
+      return a.model_name.localeCompare(b.model_name);
+    });
 
   return {
-    openai: toArray(groups.openai),
-    claude: toArray(groups.claude)
+    openai: toArray(groups.openai, 'openai'),
+    claude: toArray(groups.claude, 'claude')
   };
 }
 
 module.exports = {
+  BOARD_WATCH_PATTERNS,
   buildSub2APISiteModelPricing,
   calculatePricingFields,
   groupModelPricingBoard,
+  isWatchedBoardModel,
   modelFamily,
   parseJsonArray,
   parseJsonObject
