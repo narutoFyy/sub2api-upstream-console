@@ -662,6 +662,11 @@ function rateDiffText(route) {
   return `${sign}${money.format(diff)}x`;
 }
 
+function buyRateText(route) {
+  const rate = Number(route.upstream_buy_rate);
+  return Number.isFinite(rate) ? rateText(rate) : '需绑定';
+}
+
 function renderOwnSites() {
   const box = document.querySelector('#ownSiteList');
   if (!box) return;
@@ -697,7 +702,7 @@ function renderOwnRoutes() {
       <td><code>${escapeHtml(route.upstream_key_masked || route.matched_upstream_key_id || '-')}</code></td>
       <td>${escapeHtml(route.matched_group_name || route.matched_group_id || '-')}</td>
       <td><span class="key-platform-badge">${escapeHtml(platformLabel(route.matched_platform))}</span></td>
-      <td class="metric">${escapeHtml(rateText(route.upstream_buy_rate))}</td>
+      <td class="metric">${escapeHtml(buyRateText(route))}</td>
       <td class="metric">${escapeHtml(rateText(route.matched_group_rate))}</td>
       <td class="metric ${Number(route.matched_group_rate) >= Number(route.upstream_buy_rate) ? '' : 'danger-text'}">${escapeHtml(rateDiffText(route))}</td>
       <td>

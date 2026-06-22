@@ -124,7 +124,7 @@ function normalizeAccountAsRoute(account, index = 0) {
     upstream_api_url: baseUrl,
     upstream_key_masked: account?.credentials_status?.has_api_key ? '已配置' : '',
     upstream_key_id: pickString(account?.id),
-    upstream_buy_rate: account?.rate_multiplier ?? null,
+    upstream_buy_rate: null,
     route_status: pickString(account?.status, account?.schedulable === false ? 'disabled' : 'active'),
     group_id: pickString(primaryGroup.id, account?.group_ids?.[0]),
     group_name: pickString(primaryGroup.name),
