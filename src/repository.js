@@ -193,6 +193,116 @@ function deleteSite(id) {
   return db.prepare('DELETE FROM upstream_sites WHERE id = ?').run(id).changes > 0;
 }
 
+function rowToOwnSite(row) {
+  return row || null;
+}
+
+function listOwnSites() {
+  return db.prepare(`
+    SELECT s.*,
+           COUNT(r.id) AS route_count,
+           SUM(CASE WHEN r.match_status = 'matched' THEN 1 ELSE 0 END) AS matched_count,
+           SUM(CASE WHEN r.match_status != 'matched' THEN 1 ELSE 0 END) AS unmatched_count
+    FROM own_sites s
+    LEFT JOIN own_site_route_snapshots r ON r.own_site_id = s.id
+    GROUP BY s.id
+    ORDER BY s.id DESC
+  `).all().map(rowToOwnSite);
+}
+
+function getOwnSite(id) {
+  return rowToOwnSite(db.prepare('SELECT * FROM own_sites WHERE id = ?').get(id));
+}
+
+function getOwnSiteCredentials(id) {
+  const row = db.prepare('SELECT * FROM own_site_credentials WHERE own_site_id = ?').get(id);
+  if (!row) return {};
+  return {
+    email: decryptSecret(row.encrypted_email),
+    password: decryptSecret(row.encrypted_password),
+    token: decryptSecret(row.encrypted_token)
+  };
+}
+
+function getMaskedOwnSiteCredentials(id) {
+  const creds = getOwnSiteCredentials(id);
+  return {
+    email: creds.email,
+    password_masked: maskSecret(creds.password),
+    token_masked: maskSecret(creds.token)
+  };
+}
+
+function createOwnSite(input) {
+  const baseUrl = normalizeBaseUrl(input.base_url);
+  const now = nowIso();
+  const tx = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO own_sites (name, base_url, own_site_type, auth_mode, status, notes, created_at, updated_at)
+      VALUES (@name, @base_url, @own_site_type, @auth_mode, 'active', @notes, @now, @now)
+    `).run({
+      name: input.name,
+      base_url: baseUrl,
+      own_site_type: input.own_site_type || 'auto',
+      auth_mode: input.auth_mode || 'token',
+      notes: input.notes || '',
+      now
+    });
+    db.prepare(`
+      INSERT INTO own_site_credentials (own_site_id, encrypted_email, encrypted_password, encrypted_token, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(result.lastInsertRowid, encryptSecret(input.email || ''), encryptSecret(input.password || ''), encryptSecret(input.token || ''), now, now);
+    return getOwnSite(result.lastInsertRowid);
+  });
+  return tx();
+}
+
+function updateOwnSite(id, input) {
+  const site = getOwnSite(id);
+  if (!site) return null;
+  const now = nowIso();
+  const next = {
+    id,
+    name: input.name ?? site.name,
+    base_url: input.base_url ? normalizeBaseUrl(input.base_url) : site.base_url,
+    own_site_type: input.own_site_type ?? site.own_site_type ?? 'auto',
+    auth_mode: input.auth_mode ?? site.auth_mode ?? 'token',
+    status: input.status ?? site.status,
+    notes: input.notes ?? site.notes,
+    now
+  };
+  const tx = db.transaction(() => {
+    db.prepare(`
+      UPDATE own_sites
+      SET name=@name, base_url=@base_url, own_site_type=@own_site_type, auth_mode=@auth_mode,
+          status=@status, notes=@notes, updated_at=@now
+      WHERE id=@id
+    `).run(next);
+    const currentCreds = getOwnSiteCredentials(id);
+    db.prepare(`
+      INSERT INTO own_site_credentials (own_site_id, encrypted_email, encrypted_password, encrypted_token, created_at, updated_at)
+      VALUES (@id, @email, @password, @token, @now, @now)
+      ON CONFLICT(own_site_id) DO UPDATE SET
+        encrypted_email=@email,
+        encrypted_password=@password,
+        encrypted_token=@token,
+        updated_at=@now
+    `).run({
+      id,
+      email: encryptSecret(input.email ?? currentCreds.email ?? ''),
+      password: encryptSecret(input.password ?? currentCreds.password ?? ''),
+      token: encryptSecret(input.token ?? currentCreds.token ?? ''),
+      now
+    });
+    return getOwnSite(id);
+  });
+  return tx();
+}
+
+function deleteOwnSite(id) {
+  return db.prepare('DELETE FROM own_sites WHERE id = ?').run(id).changes > 0;
+}
+
 function latestRatesByGroup(siteId) {
   const rows = db.prepare(`
     SELECT group_id, group_name, scope, model, rate
@@ -637,10 +747,10 @@ function saveKeySnapshots(siteId, keys, capturedAt = nowIso()) {
   db.prepare('DELETE FROM upstream_api_key_snapshots WHERE upstream_site_id = ?').run(siteId);
   const insert = db.prepare(`
     INSERT INTO upstream_api_key_snapshots (
-      upstream_site_id, upstream_key_id, name, key_masked, group_id, group_name, platform,
+      upstream_site_id, upstream_key_id, name, key_masked, group_id, group_name, platform, group_rate,
       status, quota, quota_used, expires_at, last_used_at, captured_at
     ) VALUES (
-      @upstream_site_id, @upstream_key_id, @name, @key_masked, @group_id, @group_name, @platform,
+      @upstream_site_id, @upstream_key_id, @name, @key_masked, @group_id, @group_name, @platform, @group_rate,
       @status, @quota, @quota_used, @expires_at, @last_used_at, @captured_at
     )
   `);
@@ -653,6 +763,7 @@ function saveKeySnapshots(siteId, keys, capturedAt = nowIso()) {
       group_id: String(key.group_id ?? ''),
       group_name: key.group_name || '',
       platform: key.platform || '',
+      group_rate: key.group_rate ?? key.rate_multiplier ?? null,
       status: key.status || '',
       quota: key.quota ?? null,
       quota_used: key.quota_used ?? null,
@@ -703,6 +814,209 @@ function listAllKeySnapshots({ upstreamSiteId = null, platform = '', status = ''
     ORDER BY k.captured_at DESC, k.id DESC
     LIMIT ?
   `).all(...params);
+}
+
+function normalizeUrlForMatch(value) {
+  try {
+    return normalizeBaseUrl(value);
+  } catch {
+    return String(value || '').trim().replace(/\/+$/, '');
+  }
+}
+
+function keysLookAlike(left, right) {
+  const a = String(left || '').trim();
+  const b = String(right || '').trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [aPrefix, aSuffix] = a.replace(/\*/g, '').split('...');
+  const [bPrefix, bSuffix] = b.replace(/\*/g, '').split('...');
+  return Boolean(aPrefix && aSuffix && b.startsWith(aPrefix) && b.endsWith(aSuffix))
+    || Boolean(bPrefix && bSuffix && a.startsWith(bPrefix) && a.endsWith(bSuffix));
+}
+
+function listOwnSiteRoutes(ownSiteId = null, { matchStatus = '', search = '' } = {}, limit = 500) {
+  const clauses = ['1=1'];
+  const params = [];
+  if (ownSiteId) {
+    clauses.push('r.own_site_id = ?');
+    params.push(ownSiteId);
+  }
+  if (matchStatus) {
+    clauses.push('r.match_status = ?');
+    params.push(matchStatus);
+  }
+  if (search) {
+    clauses.push('(r.route_name LIKE ? OR r.model_pattern LIKE ? OR r.upstream_api_url LIKE ? OR us.name LIKE ? OR r.upstream_key_masked LIKE ?)');
+    const q = `%${search}%`;
+    params.push(q, q, q, q, q);
+  }
+  params.push(limit);
+  return db.prepare(`
+    SELECT r.*, os.name AS own_site_name, os.base_url AS own_site_base_url,
+           us.name AS matched_upstream_name, us.base_url AS matched_upstream_base_url
+    FROM own_site_route_snapshots r
+    JOIN own_sites os ON os.id = r.own_site_id
+    LEFT JOIN upstream_sites us ON us.id = r.matched_upstream_site_id
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY r.captured_at DESC, r.id DESC
+    LIMIT ?
+  `).all(...params);
+}
+
+function manualBindingForRoute(ownSiteId, routeId) {
+  return db.prepare(`
+    SELECT * FROM own_site_route_manual_bindings
+    WHERE own_site_id = ? AND route_id = ?
+  `).get(ownSiteId, String(routeId || '')) || null;
+}
+
+function resolveOwnRouteMatch(ownSiteId, route) {
+  const binding = manualBindingForRoute(ownSiteId, route.route_id);
+  const upstreams = listSites();
+  const routeUrl = normalizeUrlForMatch(route.upstream_api_url);
+  let upstream = null;
+  if (binding?.upstream_site_id) {
+    upstream = getSite(binding.upstream_site_id);
+  }
+  if (!upstream && routeUrl) {
+    upstream = upstreams.find((site) => normalizeUrlForMatch(site.base_url) === routeUrl)
+      || upstreams.find((site) => {
+        try {
+          return new URL(site.base_url).hostname === new URL(routeUrl).hostname;
+        } catch {
+          return false;
+        }
+      });
+  }
+
+  let key = null;
+  const keyCandidates = upstream
+    ? listKeySnapshots(upstream.id, 1000)
+    : listAllKeySnapshots({}, 2000);
+  if (binding?.upstream_key_id) {
+    key = listAllKeySnapshots({}, 5000).find((item) => (
+      String(item.upstream_site_id) === String(binding.upstream_site_id || item.upstream_site_id)
+      && String(item.upstream_key_id || '') === String(binding.upstream_key_id)
+    ));
+    if (key && !upstream) upstream = getSite(key.upstream_site_id);
+  }
+  if (!key && route.upstream_key_id) {
+    key = keyCandidates.find((item) => String(item.upstream_key_id || '') === String(route.upstream_key_id));
+  }
+  if (!key && route.upstream_key_masked) {
+    key = keyCandidates.find((item) => keysLookAlike(item.key_masked, route.upstream_key_masked));
+  }
+
+  const matched = Boolean(upstream && key);
+  let reason = '已匹配上游和 Key';
+  if (!upstream && !route.upstream_api_url) reason = '自己站接口未返回上游 API 地址';
+  else if (!upstream) reason = '未匹配到本地上游站点';
+  else if (!key && !route.upstream_key_masked && !route.upstream_key_id) reason = '自己站接口未返回上游 Key';
+  else if (!key) reason = '未匹配到本地上游 Key';
+
+  return {
+    matched_upstream_site_id: upstream?.id ?? null,
+    matched_upstream_key_id: key?.upstream_key_id || '',
+    matched_group_id: route.group_id || key?.group_id || '',
+    matched_group_name: route.group_name || key?.group_name || '',
+    matched_platform: route.platform || key?.platform || '',
+    matched_group_rate: route.group_rate ?? key?.group_rate ?? null,
+    upstream_buy_rate: key?.group_rate ?? route.upstream_buy_rate ?? null,
+    match_status: upstream && (key || route.group_id || route.group_name) ? 'matched' : 'unmatched',
+      match_reason: binding ? `手动绑定：${reason}` : (upstream && !key && (route.group_id || route.group_name) ? '已匹配上游，分组来自账号管理接口' : reason)
+  };
+}
+
+function saveOwnSiteRoutes(ownSiteId, routes, capturedAt = nowIso()) {
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM own_site_route_snapshots WHERE own_site_id = ?').run(ownSiteId);
+    const insert = db.prepare(`
+      INSERT INTO own_site_route_snapshots (
+        own_site_id, route_id, route_name, model_pattern, upstream_api_url,
+        matched_upstream_site_id, upstream_key_masked, upstream_key_id, upstream_buy_rate, matched_upstream_key_id,
+        matched_group_id, matched_group_name, matched_platform, matched_group_rate,
+        route_status, match_status, match_reason, raw_payload, captured_at
+      ) VALUES (
+        @own_site_id, @route_id, @route_name, @model_pattern, @upstream_api_url,
+        @matched_upstream_site_id, @upstream_key_masked, @upstream_key_id, @upstream_buy_rate, @matched_upstream_key_id,
+        @matched_group_id, @matched_group_name, @matched_platform, @matched_group_rate,
+        @route_status, @match_status, @match_reason, @raw_payload, @captured_at
+      )
+    `);
+    for (const route of routes) {
+      const match = resolveOwnRouteMatch(ownSiteId, route);
+      insert.run({
+        own_site_id: ownSiteId,
+        route_id: String(route.route_id || ''),
+        route_name: route.route_name || '',
+        model_pattern: route.model_pattern || '',
+        upstream_api_url: route.upstream_api_url || '',
+        upstream_key_masked: route.upstream_key_masked || '',
+        upstream_key_id: route.upstream_key_id || '',
+        group_id: route.group_id || '',
+        group_name: route.group_name || '',
+        platform: route.platform || '',
+        group_rate: route.group_rate ?? null,
+        route_status: route.route_status || '',
+        raw_payload: safeJson(route.raw_payload || {}),
+        captured_at: capturedAt,
+        ...match,
+        upstream_buy_rate: match.upstream_buy_rate ?? route.upstream_buy_rate ?? null
+      });
+    }
+    db.prepare(`
+      UPDATE own_sites
+      SET last_sync_at = ?, last_sync_error = '', updated_at = ?
+      WHERE id = ?
+    `).run(capturedAt, capturedAt, ownSiteId);
+  });
+  tx();
+  return listOwnSiteRoutes(ownSiteId);
+}
+
+function markOwnSiteSyncFailed(ownSiteId, message) {
+  const now = nowIso();
+  db.prepare(`
+    UPDATE own_sites
+    SET status = 'sync_failed', last_sync_error = ?, updated_at = ?
+    WHERE id = ?
+  `).run(String(message || ''), now, ownSiteId);
+}
+
+function saveOwnRouteManualBinding(ownSiteId, routeId, input) {
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO own_site_route_manual_bindings (
+      own_site_id, route_id, upstream_site_id, upstream_key_id, notes, created_at, updated_at
+    ) VALUES (
+      @own_site_id, @route_id, @upstream_site_id, @upstream_key_id, @notes, @now, @now
+    )
+    ON CONFLICT(own_site_id, route_id) DO UPDATE SET
+      upstream_site_id=@upstream_site_id,
+      upstream_key_id=@upstream_key_id,
+      notes=@notes,
+      updated_at=@now
+  `).run({
+    own_site_id: ownSiteId,
+    route_id: String(routeId || ''),
+    upstream_site_id: input.upstream_site_id || null,
+    upstream_key_id: input.upstream_key_id || '',
+    notes: input.notes || '',
+    now
+  });
+  const routes = listOwnSiteRoutes(ownSiteId).map((route) => ({
+    route_id: route.route_id,
+    route_name: route.route_name,
+    model_pattern: route.model_pattern,
+    upstream_api_url: route.upstream_api_url,
+    upstream_key_masked: route.upstream_key_masked,
+    upstream_key_id: route.upstream_key_id,
+    route_status: route.route_status,
+    raw_payload: {}
+  }));
+  saveOwnSiteRoutes(ownSiteId, routes, nowIso());
+  return manualBindingForRoute(ownSiteId, routeId);
 }
 
 function saveKeyCreateLog(siteId, key) {
@@ -835,5 +1149,16 @@ module.exports = {
   saveKeySnapshots,
   listKeySnapshots,
   listAllKeySnapshots,
-  saveKeyCreateLog
+  saveKeyCreateLog,
+  listOwnSites,
+  getOwnSite,
+  getOwnSiteCredentials,
+  getMaskedOwnSiteCredentials,
+  createOwnSite,
+  updateOwnSite,
+  deleteOwnSite,
+  saveOwnSiteRoutes,
+  listOwnSiteRoutes,
+  markOwnSiteSyncFailed,
+  saveOwnRouteManualBinding
 };

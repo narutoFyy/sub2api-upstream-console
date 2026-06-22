@@ -20,9 +20,72 @@ function unwrapPaginated(data) {
   return { items: [], total: 0, page: 1, page_size: 0, pages: 0 };
 }
 
-function normalizeSub2APIKey(raw, siteMeta = {}) {
+function firstPresent(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== '');
+}
+
+function firstNumber(...values) {
+  const value = firstPresent(...values);
+  if (value === undefined) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function buildGroupLookup(groups = []) {
+  const lookup = new Map();
+  for (const group of groups) {
+    if (group?.id !== undefined && group.id !== null) {
+      lookup.set(`id:${String(group.id)}`, group);
+    }
+    if (group?.name) {
+      lookup.set(`name:${String(group.name).toLowerCase()}`, group);
+    }
+  }
+  return lookup;
+}
+
+function findGroupMeta(groupLookup, groupId, raw = {}, group = {}) {
+  if (!groupLookup || typeof groupLookup.get !== 'function') return {};
+  if (groupId !== undefined && groupId !== null && groupId !== '') {
+    const byId = groupLookup.get(`id:${String(groupId)}`);
+    if (byId) return byId;
+  }
+  const name = firstPresent(group.name, group.group_name, raw.group_name, raw.groupName);
+  if (name) {
+    return groupLookup.get(`name:${String(name).toLowerCase()}`) || {};
+  }
+  return {};
+}
+
+function normalizeSub2APIKey(raw, siteMeta = {}, groupLookup = null) {
   const group = raw?.group && typeof raw.group === 'object' ? raw.group : {};
+  const primitiveGroup = raw?.group && typeof raw.group !== 'object' ? raw.group : null;
+  const groupId = firstPresent(
+    raw?.group_id,
+    raw?.groupId,
+    group.id,
+    group.group_id,
+    group.groupId,
+    raw?.group_info?.id,
+    raw?.groupInfo?.id,
+    primitiveGroup
+  );
+  const groupMeta = findGroupMeta(groupLookup, groupId, raw, group);
   const key = raw?.key || '';
+  const groupRate = firstNumber(
+    raw?.group_rate,
+    raw?.groupRate,
+    raw?.user_rate_multiplier,
+    raw?.userRateMultiplier,
+    group.user_rate_multiplier,
+    group.userRateMultiplier,
+    groupMeta.user_rate_multiplier,
+    raw?.rate_multiplier,
+    raw?.rateMultiplier,
+    group.rate_multiplier,
+    group.rateMultiplier,
+    groupMeta.rate_multiplier
+  );
   return {
     upstream_site_id: siteMeta.siteId,
     upstream_name: siteMeta.siteName || '',
@@ -31,11 +94,12 @@ function normalizeSub2APIKey(raw, siteMeta = {}) {
     name: raw?.name || '',
     key_masked: maskApiKey(key),
     key_full: key || null,
-    group_id: raw?.group_id ?? group.id ?? null,
-    group_name: group.name || '',
-    platform: group.platform || '',
-    rate_multiplier: group.rate_multiplier ?? null,
-    subscription_type: group.subscription_type || '',
+    group_id: groupId ?? null,
+    group_name: firstPresent(group.name, group.group_name, raw?.group_name, raw?.groupName, groupMeta.name) || '',
+    platform: firstPresent(group.platform, raw?.group_platform, raw?.groupPlatform, raw?.platform, groupMeta.platform) || '',
+    group_rate: groupRate,
+    rate_multiplier: groupRate,
+    subscription_type: firstPresent(group.subscription_type, raw?.subscription_type, groupMeta.subscription_type) || '',
     status: raw?.status || '',
     quota: raw?.quota ?? null,
     quota_used: raw?.quota_used ?? null,
@@ -49,6 +113,7 @@ function normalizeSub2APIKey(raw, siteMeta = {}) {
 function normalizeSub2APIGroup(raw, userRates = {}) {
   const id = raw?.id;
   const userRate = id != null ? (userRates[id] ?? userRates[String(id)]) : null;
+  const groupRate = firstNumber(userRate, raw?.user_rate_multiplier, raw?.rate_multiplier);
   return {
     id,
     name: raw?.name || '',
@@ -56,6 +121,7 @@ function normalizeSub2APIGroup(raw, userRates = {}) {
     platform: raw?.platform || '',
     rate_multiplier: raw?.rate_multiplier ?? null,
     user_rate_multiplier: userRate ?? null,
+    group_rate: groupRate,
     subscription_type: raw?.subscription_type || '',
     status: raw?.status || ''
   };
@@ -85,6 +151,16 @@ async function withSub2APIAuth(site, creds, fn) {
   return fn(auth);
 }
 
+async function fetchSub2APIGroupLookup(site, auth) {
+  const [groups, rates] = await Promise.all([
+    requestJson(site.base_url, '/groups/available', { token: auth.token, prefix: auth.prefix }).catch(() => []),
+    requestJson(site.base_url, '/groups/rates', { token: auth.token, prefix: auth.prefix }).catch(() => ({}))
+  ]);
+  const groupList = Array.isArray(groups) ? groups : Array.isArray(groups?.items) ? groups.items : [];
+  const userRates = rates && typeof rates === 'object' && !Array.isArray(rates) ? rates : {};
+  return buildGroupLookup(groupList.map((group) => normalizeSub2APIGroup(group, userRates)));
+}
+
 async function listSub2APIKeys(site, creds, { page = 1, pageSize = 100, search = '', status = '', groupId = null } = {}) {
   return withSub2APIAuth(site, creds, async (auth) => {
     const params = new URLSearchParams({
@@ -96,15 +172,18 @@ async function listSub2APIKeys(site, creds, { page = 1, pageSize = 100, search =
     if (search) params.set('search', search);
     if (status) params.set('status', status);
     if (groupId != null && groupId !== '') params.set('group_id', String(groupId));
-    const data = await requestJson(site.base_url, `/keys?${params.toString()}`, {
-      token: auth.token,
-      prefix: auth.prefix
-    });
+    const [data, groupLookup] = await Promise.all([
+      requestJson(site.base_url, `/keys?${params.toString()}`, {
+        token: auth.token,
+        prefix: auth.prefix
+      }),
+      fetchSub2APIGroupLookup(site, auth)
+    ]);
     const pageData = unwrapPaginated(data);
     const siteMeta = { siteId: site.id, siteName: site.name, baseUrl: site.base_url };
     return {
       ...pageData,
-      items: pageData.items.map((item) => normalizeSub2APIKey(item, siteMeta))
+      items: pageData.items.map((item) => normalizeSub2APIKey(item, siteMeta, groupLookup))
     };
   });
 }
@@ -132,13 +211,16 @@ async function createSub2APIKey(site, creds, payload) {
     if (payload.expires_in_days != null && Number(payload.expires_in_days) > 0) {
       body.expires_in_days = Number(payload.expires_in_days);
     }
-    const data = await requestJson(site.base_url, '/keys', {
-      method: 'POST',
-      body,
-      token: auth.token,
-      prefix: auth.prefix
-    });
-    return normalizeSub2APIKey(data, { siteId: site.id, siteName: site.name, baseUrl: site.base_url });
+    const [data, groupLookup] = await Promise.all([
+      requestJson(site.base_url, '/keys', {
+        method: 'POST',
+        body,
+        token: auth.token,
+        prefix: auth.prefix
+      }),
+      fetchSub2APIGroupLookup(site, auth)
+    ]);
+    return normalizeSub2APIKey(data, { siteId: site.id, siteName: site.name, baseUrl: site.base_url }, groupLookup);
   });
 }
 
@@ -148,13 +230,16 @@ async function updateSub2APIKey(site, creds, keyId, payload) {
     if (payload.name) body.name = payload.name;
     if (payload.group_id != null) body.group_id = payload.group_id;
     if (payload.status) body.status = payload.status;
-    const data = await requestJson(site.base_url, `/keys/${keyId}`, {
-      method: 'PUT',
-      body,
-      token: auth.token,
-      prefix: auth.prefix
-    });
-    return normalizeSub2APIKey(data, { siteId: site.id, siteName: site.name, baseUrl: site.base_url });
+    const [data, groupLookup] = await Promise.all([
+      requestJson(site.base_url, `/keys/${keyId}`, {
+        method: 'PUT',
+        body,
+        token: auth.token,
+        prefix: auth.prefix
+      }),
+      fetchSub2APIGroupLookup(site, auth)
+    ]);
+    return normalizeSub2APIKey(data, { siteId: site.id, siteName: site.name, baseUrl: site.base_url }, groupLookup);
   });
 }
 

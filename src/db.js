@@ -231,6 +231,7 @@ CREATE TABLE IF NOT EXISTS upstream_api_key_snapshots (
   group_id TEXT NOT NULL DEFAULT '',
   group_name TEXT NOT NULL DEFAULT '',
   platform TEXT NOT NULL DEFAULT '',
+  group_rate REAL,
   status TEXT NOT NULL DEFAULT '',
   quota REAL,
   quota_used REAL,
@@ -257,6 +258,73 @@ CREATE TABLE IF NOT EXISTS upstream_key_create_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_upstream_key_create_logs_site ON upstream_key_create_logs(upstream_site_id, created_at);
+
+CREATE TABLE IF NOT EXISTS own_sites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  own_site_type TEXT NOT NULL DEFAULT 'auto',
+  auth_mode TEXT NOT NULL DEFAULT 'token',
+  status TEXT NOT NULL DEFAULT 'active',
+  notes TEXT NOT NULL DEFAULT '',
+  last_sync_at TEXT,
+  last_sync_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_own_sites_base_url ON own_sites(base_url);
+
+CREATE TABLE IF NOT EXISTS own_site_credentials (
+  own_site_id INTEGER PRIMARY KEY,
+  encrypted_email TEXT NOT NULL DEFAULT '',
+  encrypted_password TEXT NOT NULL DEFAULT '',
+  encrypted_token TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (own_site_id) REFERENCES own_sites(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS own_site_route_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  own_site_id INTEGER NOT NULL,
+  route_id TEXT NOT NULL DEFAULT '',
+  route_name TEXT NOT NULL DEFAULT '',
+  model_pattern TEXT NOT NULL DEFAULT '',
+  upstream_api_url TEXT NOT NULL DEFAULT '',
+  matched_upstream_site_id INTEGER,
+  upstream_key_masked TEXT NOT NULL DEFAULT '',
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  upstream_buy_rate REAL,
+  matched_upstream_key_id TEXT NOT NULL DEFAULT '',
+  matched_group_id TEXT NOT NULL DEFAULT '',
+  matched_group_name TEXT NOT NULL DEFAULT '',
+  matched_platform TEXT NOT NULL DEFAULT '',
+  matched_group_rate REAL,
+  route_status TEXT NOT NULL DEFAULT '',
+  match_status TEXT NOT NULL DEFAULT '',
+  match_reason TEXT NOT NULL DEFAULT '',
+  raw_payload TEXT NOT NULL DEFAULT '{}',
+  captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (own_site_id) REFERENCES own_sites(id) ON DELETE CASCADE,
+  FOREIGN KEY (matched_upstream_site_id) REFERENCES upstream_sites(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_own_site_route_snapshots_site ON own_site_route_snapshots(own_site_id, captured_at);
+
+CREATE TABLE IF NOT EXISTS own_site_route_manual_bindings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  own_site_id INTEGER NOT NULL,
+  route_id TEXT NOT NULL DEFAULT '',
+  upstream_site_id INTEGER,
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (own_site_id, route_id),
+  FOREIGN KEY (own_site_id) REFERENCES own_sites(id) ON DELETE CASCADE,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE SET NULL
+);
 `);
 
 function ensureColumn(table, column, definition) {
@@ -314,5 +382,7 @@ ensureColumn('model_pricing_snapshots', 'upstream_output_usd_per_1m', 'REAL');
 ensureColumn('model_pricing_snapshots', 'upstream_cache_read_usd_per_1m', 'REAL');
 ensureColumn('model_pricing_snapshots', 'upstream_cache_write_usd_per_1m', 'REAL');
 ensureColumn('model_pricing_snapshots', 'upstream_request_usd', 'REAL');
+ensureColumn('upstream_api_key_snapshots', 'group_rate', 'REAL');
+ensureColumn('own_site_route_snapshots', 'upstream_buy_rate', 'REAL');
 
 module.exports = db;

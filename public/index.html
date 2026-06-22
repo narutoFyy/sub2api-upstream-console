@@ -203,6 +203,7 @@
                   <th>Key</th>
                   <th>分组</th>
                   <th>平台</th>
+                  <th>分组倍率</th>
                   <th>状态</th>
                   <th>配额</th>
                   <th>最后使用</th>
@@ -210,6 +211,84 @@
                 </tr>
               </thead>
               <tbody id="upstreamKeyRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" id="ownSitesPanel">
+          <div class="panel-title">
+            <div>
+              <h2>自己站观测</h2>
+              <p>把你自己的中转站也纳入观察：查看每条渠道接了哪个上游 API、哪条上游 Key，以及对应分组倍率。</p>
+            </div>
+            <div class="toolbar">
+              <button id="resetOwnSiteFormBtn" class="ghost" type="button">新增自己站</button>
+              <button id="refreshOwnSitesBtn" class="ghost" type="button">刷新自己站</button>
+            </div>
+          </div>
+          <form id="ownSiteForm" class="grid-form">
+            <input name="id" type="hidden" />
+            <label>名称<input name="name" placeholder="例如：我的 API 中转站" required /></label>
+            <label>Base URL<input name="base_url" placeholder="https://api.example.com" required /></label>
+            <label>站点类型
+              <select name="own_site_type">
+                <option value="auto">自动识别</option>
+                <option value="sub2api">Sub2API</option>
+                <option value="new-api">new-api</option>
+              </select>
+            </label>
+            <label>认证模式
+              <select name="auth_mode">
+                <option value="token">Token</option>
+                <option value="password">账号密码</option>
+                <option value="admin">管理员 Token</option>
+              </select>
+            </label>
+            <label>邮箱<input name="email" type="email" placeholder="账号密码模式可填" /></label>
+            <label>密码<input name="password" type="password" placeholder="修改时留空则保留" autocomplete="new-password" /></label>
+            <label>Token<input name="token" type="password" placeholder="推荐填写管理 Token" autocomplete="new-password" /></label>
+            <label>备注<input name="notes" placeholder="例如：生产站，只读观察" /></label>
+            <div class="form-actions">
+              <button id="testOwnSiteBtn" class="ghost" type="button">测试读取渠道</button>
+              <button class="secondary" type="submit">保存自己站</button>
+            </div>
+          </form>
+          <p id="ownSiteMessage" class="notice">第一版只做只读观测，不会修改你自己站的路由配置。</p>
+          <div class="split own-site-split">
+            <div>
+              <h3>自己站列表</h3>
+              <div id="ownSiteList" class="list"></div>
+            </div>
+            <div>
+              <h3>路由映射筛选</h3>
+              <div class="toolbar own-route-toolbar">
+                <select id="ownRouteMatchFilter">
+                  <option value="">全部映射</option>
+                  <option value="matched">已匹配</option>
+                  <option value="unmatched">未匹配</option>
+                </select>
+                <input id="ownRouteSearchInput" placeholder="搜索模型、上游、Key" />
+              </div>
+              <p class="notice">匹配不到时会显示原因，可后续通过手动绑定兜底。</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>自己站 / 渠道</th>
+                  <th>上游 API</th>
+                  <th>匹配上游</th>
+                  <th>上游 Key</th>
+                  <th>绑定分组</th>
+                  <th>平台</th>
+                  <th>上游给我们</th>
+                  <th>我们卖出</th>
+                  <th>倍率差</th>
+                  <th>状态 / 原因</th>
+                </tr>
+              </thead>
+              <tbody id="ownRouteRows"></tbody>
             </table>
           </div>
         </section>
@@ -252,6 +331,27 @@
             <p id="createKeyMessage" class="notice"></p>
             <div class="form-actions">
               <button type="submit" class="primary">创建 Key</button>
+            </div>
+          </form>
+        </dialog>
+
+        <dialog id="bindOwnRouteDialog" class="key-dialog">
+          <form id="bindOwnRouteForm" method="dialog" class="key-dialog-body">
+            <div class="panel-title">
+              <div>
+                <h2>绑定上游 Key</h2>
+                <p>用于确认这条自己站账号实际接入了哪条上游 Key，从而读取正确的上游采购倍率。</p>
+              </div>
+              <button type="button" id="closeBindOwnRouteBtn" class="ghost">关闭</button>
+            </div>
+            <input name="own_site_id" type="hidden" />
+            <input name="route_id" type="hidden" />
+            <label>选择上游 Key
+              <select name="binding" id="bindOwnRouteKeySelect" required></select>
+            </label>
+            <p id="bindOwnRouteMessage" class="notice"></p>
+            <div class="form-actions">
+              <button type="submit" class="primary">保存绑定</button>
             </div>
           </form>
         </dialog>

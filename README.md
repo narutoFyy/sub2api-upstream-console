@@ -31,6 +31,8 @@ http://localhost:4317
 - [需求文档](docs/PRD_CN.md)
 - [部署说明](docs/DEPLOY_CN.md)
 - [备份说明](docs/BACKUP_CN.md)
+- [API Key 绑定分组展示需求](docs/API_KEY_GROUP_DISPLAY_REQUIREMENT_CN.md)
+- [自己站观测与上游路由映射需求](docs/OWN_SITE_OBSERVABILITY_REQUIREMENT_CN.md)
 - [模型广场价格 TODO](docs/MODEL_PRICING_TODO_CN.md)
 - [代办清单](TODO_CN.md)
 
@@ -93,6 +95,14 @@ http://localhost:4317
 - 支持启用/停用、删除 Key；上游详情页提供「在此上游创建 Key」快捷入口。
 - 模型价格广场仅展示重点监控模型（GPT-5.4/5.5、指定 Claude 型号）。
 
+### 自己站观测
+
+- 新增「自己站观测」区块，可保存自己运营的中转站地址和凭证。
+- 支持读取自己站 `/admin/accounts` 账号管理数据，展示每条账号接入的上游 API 地址、账号状态和自己站绑定分组。
+- 支持手动把自己站账号绑定到本地已同步的上游 Key，用于确认这条账号实际使用哪条上游 Key。
+- 支持进销倍率对账：`上游给我们` 取绑定上游 Key 的分组倍率，`我们卖出` 取自己站账号所在分组倍率，并显示倍率差。
+- 匹配成功时展示上游名称、平台、采购倍率、售卖倍率和分组信息；匹配失败时显示具体原因。
+
 ### 前端体验
 
 - 上游列表支持搜索、标签筛选、状态筛选和排序。
@@ -122,13 +132,14 @@ http://localhost:4317
 - 上游列表新增 **OpenAI 倍率**、**Anthropic 倍率** 两列，展示各平台最低分组倍率。
 - 详情页与模型价格摘要同步改为按平台展示，不再单独统计 Codex。
 - 无 new-api `/api/pricing` 快照时，使用内置官方基准价叠加上游分组倍率，修复 `auto` 类型上游模型广场价格为空的问题。
+- 新增「自己站观测」第一版：读取自己站账号管理 `/admin/accounts`，并支持绑定本地上游 Key 做采购倍率与售卖分组倍率对账。
 
 ### v1.7.0 - 2026-06-13
 
-- 新增「API Key 管理」首页板块，跨上游查看、创建、启停和删除 Sub2API Key。
+- 新增「API Key 管理」首页板块，跨上游查看、创建、启停和删除 Sub2API Key，并展示每个 Key 绑定的分组、平台与分组倍率。
 - 新增 `src/upstreamKeys.js` 与 `/api/upstream-keys`、`/api/upstreams/:id/keys`、`/api/upstreams/:id/key-groups` 等接口。
 - 创建 Key 时通过分组下拉选择 OpenAI / Claude 等线路，无需逐个登录上游网站。
-- 新增 `upstream_api_key_snapshots` 和 `upstream_key_create_logs` 表，同步时保存 Key 快照，创建时加密保存完整密钥。
+- 新增 `upstream_api_key_snapshots` 和 `upstream_key_create_logs` 表，同步时保存 Key 快照与分组倍率，创建时加密保存完整密钥。
 - 模型价格广场增加监控白名单，OpenAI 仅展示 GPT-5.4 / GPT-5.5，Claude 仅展示指定型号。
 - 修复 `public/app.js` 编码损坏导致的页面白屏问题。
 

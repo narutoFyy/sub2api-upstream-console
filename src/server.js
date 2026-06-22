@@ -7,6 +7,7 @@ const repo = require('./repository');
 const { seedFromEnv } = require('./seed');
 const { syncSite, syncAllSites, syncDueSites } = require('./syncService');
 const { createPaymentOrder, fetchSub2APIState, getPaymentOrder } = require('./upstreamClient');
+const { fetchOwnSiteRoutes } = require('./ownSiteClient');
 const {
   listSub2APIKeys,
   listSub2APIGroups,
@@ -194,6 +195,35 @@ const updateUpstreamKeySchema = z.object({
   name: z.string().min(1).max(100).optional(),
   group_id: z.number().int().positive().optional(),
   status: z.enum(['active', 'inactive']).optional()
+});
+
+const ownSiteSchema = z.object({
+  name: z.string().min(1),
+  base_url: z.string().url(),
+  own_site_type: z.enum(['auto', 'sub2api', 'new-api']).optional().default('auto'),
+  auth_mode: z.enum(['password', 'token', 'admin']).optional().default('token'),
+  email: z.string().optional().default(''),
+  password: z.string().optional().default(''),
+  token: z.string().optional().default(''),
+  notes: z.string().optional().default('')
+});
+
+const ownSiteUpdateSchema = z.object({
+  name: z.string().min(1).optional(),
+  base_url: z.string().url().optional(),
+  own_site_type: z.enum(['auto', 'sub2api', 'new-api']).optional(),
+  auth_mode: z.enum(['password', 'token', 'admin']).optional(),
+  status: z.enum(['active', 'disabled', 'sync_failed']).optional(),
+  email: z.string().optional(),
+  password: z.string().optional(),
+  token: z.string().optional(),
+  notes: z.string().optional()
+});
+
+const ownRouteBindingSchema = z.object({
+  upstream_site_id: z.number().int().positive().optional().nullable(),
+  upstream_key_id: z.string().optional().default(''),
+  notes: z.string().optional().default('')
 });
 
 function getSiteCredentials(siteId) {
@@ -390,6 +420,108 @@ app.delete('/api/upstreams/:id', (req, res) => {
   res.json({ deleted: repo.deleteSite(Number(req.params.id)) });
 });
 
+app.get('/api/own-sites', (req, res) => {
+  res.json({ items: repo.listOwnSites() });
+});
+
+app.post('/api/own-sites', (req, res, next) => {
+  try {
+    const payload = ownSiteSchema.parse(req.body || {});
+    res.status(201).json(repo.createOwnSite(payload));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/own-sites/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const site = repo.getOwnSite(id);
+  if (!site) return res.status(404).json({ error: 'Not found' });
+  res.json({
+    site,
+    credentials: safeCredentials(repo.getMaskedOwnSiteCredentials(id)),
+    routes: repo.listOwnSiteRoutes(id)
+  });
+});
+
+app.put('/api/own-sites/:id', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const payload = ownSiteUpdateSchema.parse(req.body || {});
+    for (const field of ['email', 'password', 'token']) {
+      if (payload[field] === '') delete payload[field];
+    }
+    const site = repo.updateOwnSite(id, payload);
+    if (!site) return res.status(404).json({ error: 'Not found' });
+    res.json(site);
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/own-sites/:id', (req, res) => {
+  res.json({ deleted: repo.deleteOwnSite(Number(req.params.id)) });
+});
+
+app.post('/api/own-sites/:id/test', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const site = repo.getOwnSite(id);
+    if (!site) return res.status(404).json({ error: 'Not found' });
+    const creds = repo.getOwnSiteCredentials(id);
+    const result = await fetchOwnSiteRoutes({
+      baseUrl: site.base_url,
+      email: creds.email,
+      password: creds.password,
+      token: creds.token
+    });
+    res.json({ ok: true, routes_count: result.routes.length, source_path: result.source_path });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/own-sites/:id/sync', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const site = repo.getOwnSite(id);
+    if (!site) return res.status(404).json({ error: 'Not found' });
+    const creds = repo.getOwnSiteCredentials(id);
+    const result = await fetchOwnSiteRoutes({
+      baseUrl: site.base_url,
+      email: creds.email,
+      password: creds.password,
+      token: creds.token
+    });
+    const routes = repo.saveOwnSiteRoutes(id, result.routes);
+    res.json({ ok: true, source_path: result.source_path, routes });
+  } catch (err) {
+    repo.markOwnSiteSyncFailed(Number(req.params.id), err.message);
+    next(err);
+  }
+});
+
+app.get('/api/own-site-routes', (req, res) => {
+  res.json({
+    items: repo.listOwnSiteRoutes(null, {
+      matchStatus: String(req.query.match_status || ''),
+      search: String(req.query.search || '')
+    }, 1000)
+  });
+});
+
+app.post('/api/own-sites/:id/routes/:routeId/manual-bind', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!repo.getOwnSite(id)) return res.status(404).json({ error: 'Not found' });
+    const payload = ownRouteBindingSchema.parse(req.body || {});
+    const binding = repo.saveOwnRouteManualBinding(id, req.params.routeId, payload);
+    res.json({ binding, routes: repo.listOwnSiteRoutes(id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.post('/api/upstreams/:id/status', (req, res, next) => {
   try {
     const id = Number(req.params.id);
@@ -486,6 +618,8 @@ app.get('/api/upstream-keys', async (req, res, next) => {
         group_id: row.group_id ? Number(row.group_id) : null,
         group_name: row.group_name,
         platform: row.platform,
+        group_rate: row.group_rate ?? null,
+        rate_multiplier: row.group_rate ?? null,
         status: row.status,
         quota: row.quota,
         quota_used: row.quota_used,

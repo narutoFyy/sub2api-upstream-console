@@ -4,6 +4,8 @@
   upstreamKeys: [],
   upstreamKeyErrors: [],
   keyGroupsCache: new Map(),
+  ownSites: [],
+  ownRoutes: [],
   logs: [],
   details: new Map(),
   authEnabled: false,
@@ -20,6 +22,10 @@
     upstreamSiteId: '',
     platform: '',
     status: '',
+    search: ''
+  },
+  ownRouteFilters: {
+    matchStatus: '',
     search: ''
   }
 };
@@ -509,11 +515,23 @@ function renderUpstreamKeyErrors() {
   box.textContent = state.upstreamKeyErrors.map((item) => `${item.upstream_name}: ${item.error}`).join('；');
 }
 
+function keyGroupText(item) {
+  if (item.group_name) return item.group_name;
+  if (item.group_id !== undefined && item.group_id !== null && item.group_id !== '') return `分组 #${item.group_id}`;
+  return '-';
+}
+
+function keyGroupRateText(item) {
+  const rate = item.group_rate ?? item.rate_multiplier ?? item.user_rate_multiplier;
+  const numeric = Number(rate);
+  return Number.isFinite(numeric) ? `${money.format(numeric)}x` : '-';
+}
+
 function renderUpstreamKeyRows() {
   const tbody = document.querySelector('#upstreamKeyRows');
   if (!tbody) return;
   if (!state.upstreamKeys.length) {
-    tbody.innerHTML = '<tr><td colspan="9" class="empty">暂无 Key。可以先同步上游，或点击「创建 Key」。</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">暂无 Key。可以先同步上游，或点击「创建 Key」。</td></tr>';
     return;
   }
   tbody.innerHTML = state.upstreamKeys.map((item) => `
@@ -521,8 +539,9 @@ function renderUpstreamKeyRows() {
       <td><strong>${escapeHtml(item.upstream_name || `#${item.upstream_site_id}`)}</strong></td>
       <td>${escapeHtml(item.name || '-')}</td>
       <td><code>${escapeHtml(item.key_masked || '-')}</code></td>
-      <td>${escapeHtml(item.group_name || item.group_id || '-')}</td>
+      <td>${escapeHtml(keyGroupText(item))}</td>
       <td><span class="key-platform-badge">${escapeHtml(platformLabel(item.platform))}</span></td>
+      <td class="metric">${escapeHtml(keyGroupRateText(item))}</td>
       <td>${escapeHtml(keyStatusLabel(item.status))}</td>
       <td>${escapeHtml(keyQuotaText(item))}</td>
       <td>${escapeHtml(timeText(item.last_used_at))}</td>
@@ -548,8 +567,7 @@ function renderCreateKeyGroupOptions(groups) {
   }
   select.disabled = false;
   select.innerHTML = groups.map((group) => {
-    const rate = group.user_rate_multiplier ?? group.rate_multiplier;
-    const rateTextValue = Number.isFinite(Number(rate)) ? `${money.format(Number(rate))}x` : '-';
+    const rateTextValue = keyGroupRateText(group);
     return `<option value="${group.id}">${escapeHtml(group.name)} · ${escapeHtml(platformLabel(group.platform))} · ${escapeHtml(rateTextValue)}</option>`;
   }).join('');
 }
@@ -594,9 +612,137 @@ function showCreatedKeyDialog(key, item) {
   const dialog = document.querySelector('#createdKeyDialog');
   document.querySelector('#createdKeyValue').textContent = key || '';
   document.querySelector('#createdKeyMeta').textContent = item
-    ? `${item.upstream_name || ''} · ${item.group_name || ''} · ${platformLabel(item.platform)}`
+    ? `${item.upstream_name || ''} · ${keyGroupText(item)} · ${platformLabel(item.platform)} · ${keyGroupRateText(item)}`
     : '';
   dialog.showModal();
+}
+
+function getOwnSitePayload() {
+  const form = document.querySelector('#ownSiteForm');
+  return Object.fromEntries(new FormData(form).entries());
+}
+
+function setOwnSiteForm(site = null, credentials = {}) {
+  const form = document.querySelector('#ownSiteForm');
+  if (!form) return;
+  form.id.value = site?.id || '';
+  form.name.value = site?.name || '';
+  form.base_url.value = site?.base_url || '';
+  form.own_site_type.value = site?.own_site_type || 'auto';
+  form.auth_mode.value = site?.auth_mode || 'token';
+  form.email.value = credentials.email && !credentials.email.includes('*') ? credentials.email : '';
+  form.password.value = '';
+  form.token.value = '';
+  form.notes.value = site?.notes || '';
+  document.querySelector('#ownSiteMessage').textContent = site
+    ? `正在编辑自己站：${site.name}。密码或 Token 留空会保留原凭证。`
+    : '第一版只做只读观测，不会修改你自己站的路由配置。';
+}
+
+function showOwnSiteMessage(text, tone = '') {
+  const el = document.querySelector('#ownSiteMessage');
+  if (!el) return;
+  el.textContent = text;
+  el.className = `notice ${tone}`.trim();
+}
+
+function ownRouteStatusText(status) {
+  return {
+    matched: '已匹配',
+    unmatched: '未匹配'
+  }[status] || status || '未知';
+}
+
+function rateDiffText(route) {
+  const buy = Number(route.upstream_buy_rate);
+  const sell = Number(route.matched_group_rate);
+  if (!Number.isFinite(buy) || !Number.isFinite(sell)) return '-';
+  const diff = sell - buy;
+  const sign = diff > 0 ? '+' : '';
+  return `${sign}${money.format(diff)}x`;
+}
+
+function renderOwnSites() {
+  const box = document.querySelector('#ownSiteList');
+  if (!box) return;
+  box.innerHTML = state.ownSites.length ? state.ownSites.map((site) => `
+    <div class="list-item">
+      <strong>${escapeHtml(site.name)} · ${escapeHtml(statusText(site.status))}</strong>
+      <small>${escapeHtml(site.base_url)} · 渠道 ${Number(site.route_count || 0)} · 已匹配 ${Number(site.matched_count || 0)} · 最近同步 ${escapeHtml(timeText(site.last_sync_at))}</small>
+      ${site.last_sync_error ? `<small class="danger-text">${escapeHtml(site.last_sync_error)}</small>` : ''}
+      <div class="key-actions">
+        <button class="ghost" type="button" data-own-sync-id="${site.id}">同步</button>
+        <button class="ghost" type="button" data-own-edit-id="${site.id}">编辑</button>
+        <button class="ghost danger" type="button" data-own-delete-id="${site.id}">删除</button>
+      </div>
+    </div>
+  `).join('') : '<p class="empty">还没有自己站。先在上方保存一个自己站，再同步渠道。</p>';
+}
+
+function renderOwnRoutes() {
+  const tbody = document.querySelector('#ownRouteRows');
+  if (!tbody) return;
+  if (!state.ownRoutes.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">暂无路由映射。保存自己站并同步后会显示。</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.ownRoutes.map((route) => `
+    <tr>
+      <td>
+        <strong>${escapeHtml(route.own_site_name || `自己站 #${route.own_site_id}`)}</strong>
+        <small>${escapeHtml(route.route_name || route.route_id || '未命名渠道')}</small>
+      </td>
+      <td><span class="url">${escapeHtml(route.upstream_api_url || '-')}</span></td>
+      <td>${route.matched_upstream_name ? `<strong>${escapeHtml(route.matched_upstream_name)}</strong>` : '<span class="empty">未匹配</span>'}</td>
+      <td><code>${escapeHtml(route.upstream_key_masked || route.matched_upstream_key_id || '-')}</code></td>
+      <td>${escapeHtml(route.matched_group_name || route.matched_group_id || '-')}</td>
+      <td><span class="key-platform-badge">${escapeHtml(platformLabel(route.matched_platform))}</span></td>
+      <td class="metric">${escapeHtml(rateText(route.upstream_buy_rate))}</td>
+      <td class="metric">${escapeHtml(rateText(route.matched_group_rate))}</td>
+      <td class="metric ${Number(route.matched_group_rate) >= Number(route.upstream_buy_rate) ? '' : 'danger-text'}">${escapeHtml(rateDiffText(route))}</td>
+      <td>
+        <span class="status ${escapeHtml(route.match_status || 'unmatched')}">${escapeHtml(ownRouteStatusText(route.match_status))}</span>
+        <small>${escapeHtml(route.match_reason || '')}</small>
+        <button class="ghost" type="button" data-bind-own-site-id="${route.own_site_id}" data-bind-route-id="${escapeHtml(route.route_id)}">绑定上游 Key</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function upstreamKeyBindingOptions() {
+  return state.upstreamKeys.map((key) => {
+    const value = `${key.upstream_site_id}::${key.id || key.upstream_key_id || ''}`;
+    const label = `${key.upstream_name || `上游 #${key.upstream_site_id}`} · ${key.name || key.key_masked || '未命名 Key'} · ${key.key_masked || ''} · ${keyGroupText(key)} · ${keyGroupRateText(key)}`;
+    return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+  }).join('');
+}
+
+async function openBindOwnRouteDialog(ownSiteId, routeId) {
+  if (!state.upstreamKeys.length) await loadUpstreamKeys();
+  const dialog = document.querySelector('#bindOwnRouteDialog');
+  const form = document.querySelector('#bindOwnRouteForm');
+  const select = document.querySelector('#bindOwnRouteKeySelect');
+  const message = document.querySelector('#bindOwnRouteMessage');
+  if (!dialog || !form || !select) return;
+  form.own_site_id.value = ownSiteId;
+  form.route_id.value = routeId;
+  select.innerHTML = upstreamKeyBindingOptions() || '<option value="">请先同步上游 Key 列表</option>';
+  message.textContent = state.upstreamKeys.length ? '请选择这条自己站账号实际使用的上游 Key。' : '没有可绑定的上游 Key，请先在 API Key 管理里刷新。';
+  dialog.showModal();
+}
+
+async function loadOwnSitesAndRoutes() {
+  const params = new URLSearchParams();
+  if (state.ownRouteFilters.matchStatus) params.set('match_status', state.ownRouteFilters.matchStatus);
+  if (state.ownRouteFilters.search) params.set('search', state.ownRouteFilters.search);
+  const [sitesResult, routesResult] = await Promise.all([
+    api('/api/own-sites').catch(() => ({ items: [] })),
+    api(`/api/own-site-routes?${params.toString()}`).catch(() => ({ items: [] }))
+  ]);
+  state.ownSites = sitesResult.items || [];
+  state.ownRoutes = routesResult.items || [];
+  renderOwnSites();
+  renderOwnRoutes();
 }
 
 function renderModelPricingBoard() {
@@ -938,6 +1084,7 @@ async function refresh() {
   renderModelPricingBoard();
   populateKeyUpstreamFilters();
   await loadUpstreamKeys();
+  await loadOwnSitesAndRoutes();
   if (state.selectedDetailId && state.details.has(state.selectedDetailId)) {
     renderDetail(state.details.get(state.selectedDetailId));
   }
@@ -1042,6 +1189,41 @@ document.querySelector('#testConnectionBtn').addEventListener('click', async (ev
 
 document.querySelector('#resetFormBtn').addEventListener('click', () => {
   setForm();
+});
+
+document.querySelector('#ownSiteForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const payload = getOwnSitePayload();
+  const id = payload.id;
+  delete payload.id;
+  if (!payload.password) delete payload.password;
+  if (!payload.token) delete payload.token;
+  const method = id ? 'PUT' : 'POST';
+  const url = id ? `/api/own-sites/${id}` : '/api/own-sites';
+  await api(url, { method, body: JSON.stringify(payload) });
+  showOwnSiteMessage(id ? '自己站已更新。' : '自己站已保存，可以点击同步读取渠道。', 'success');
+  setOwnSiteForm();
+  await loadOwnSitesAndRoutes();
+});
+
+document.querySelector('#testOwnSiteBtn')?.addEventListener('click', async (event) => {
+  const payload = getOwnSitePayload();
+  if (!payload.id) {
+    showOwnSiteMessage('请先保存自己站，再测试读取渠道。', 'error');
+    return;
+  }
+  await withButton(event.currentTarget, '测试中...', async () => {
+    const result = await api(`/api/own-sites/${payload.id}/test`, { method: 'POST' });
+    showOwnSiteMessage(`读取成功：${result.routes_count} 条渠道，来源 ${result.source_path}。`, 'success');
+  });
+});
+
+document.querySelector('#resetOwnSiteFormBtn')?.addEventListener('click', () => {
+  setOwnSiteForm();
+});
+
+document.querySelector('#refreshOwnSitesBtn')?.addEventListener('click', async (event) => {
+  await withButton(event.currentTarget, '刷新中...', loadOwnSitesAndRoutes);
 });
 
 document.querySelector('#closeDetailBtn').addEventListener('click', () => {
@@ -1161,6 +1343,34 @@ document.addEventListener('click', async (event) => {
       await loadUpstreamKeys();
     });
   }
+
+  const ownSyncId = event.target?.dataset?.ownSyncId;
+  if (ownSyncId) {
+    await withButton(event.target, '同步中...', async () => {
+      await api(`/api/own-sites/${ownSyncId}/sync`, { method: 'POST' });
+      await loadOwnSitesAndRoutes();
+    });
+  }
+
+  const ownEditId = event.target?.dataset?.ownEditId;
+  if (ownEditId) {
+    const detail = await api(`/api/own-sites/${ownEditId}`);
+    setOwnSiteForm(detail.site, detail.credentials);
+    document.querySelector('#ownSiteForm')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  const ownDeleteId = event.target?.dataset?.ownDeleteId;
+  if (ownDeleteId) {
+    const site = state.ownSites.find((item) => Number(item.id) === Number(ownDeleteId));
+    if (!confirm(`确定删除自己站「${site?.name || ownDeleteId}」吗？这会同时删除它的路由快照。`)) return;
+    await api(`/api/own-sites/${ownDeleteId}`, { method: 'DELETE' });
+    await loadOwnSitesAndRoutes();
+  }
+
+  const bindOwnSiteId = event.target?.dataset?.bindOwnSiteId;
+  if (bindOwnSiteId) {
+    await openBindOwnRouteDialog(Number(bindOwnSiteId), event.target.dataset.bindRouteId || '');
+  }
 });
 
 document.querySelector('#syncAllBtn').addEventListener('click', async (event) => {
@@ -1220,6 +1430,14 @@ document.querySelector('#keySearchInput')?.addEventListener('input', (event) => 
   state.keyFilters.search = event.target.value;
   loadUpstreamKeys().catch(console.error);
 });
+document.querySelector('#ownRouteMatchFilter')?.addEventListener('change', (event) => {
+  state.ownRouteFilters.matchStatus = event.target.value;
+  loadOwnSitesAndRoutes().catch(console.error);
+});
+document.querySelector('#ownRouteSearchInput')?.addEventListener('input', (event) => {
+  state.ownRouteFilters.search = event.target.value;
+  loadOwnSitesAndRoutes().catch(console.error);
+});
 document.querySelector('#createKeyUpstreamSelect')?.addEventListener('change', (event) => {
   const platform = document.querySelector('#createKeyPlatformFilter')?.value || '';
   loadCreateKeyGroups(event.target.value, platform).catch(console.error);
@@ -1235,11 +1453,34 @@ document.querySelector('#closeCreateKeyBtn')?.addEventListener('click', () => {
 document.querySelector('#closeCreatedKeyBtn')?.addEventListener('click', () => {
   document.querySelector('#createdKeyDialog')?.close();
 });
+document.querySelector('#closeBindOwnRouteBtn')?.addEventListener('click', () => {
+  document.querySelector('#bindOwnRouteDialog')?.close();
+});
 document.querySelector('#copyCreatedKeyBtn')?.addEventListener('click', async () => {
   const text = document.querySelector('#createdKeyValue')?.textContent || '';
   if (!text) return;
   await navigator.clipboard.writeText(text);
   showMessage('Key 已复制到剪贴板', 'success');
+});
+document.querySelector('#bindOwnRouteForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const [upstreamSiteId, upstreamKeyId] = String(form.binding.value || '').split('::');
+  const message = document.querySelector('#bindOwnRouteMessage');
+  if (!upstreamSiteId || !upstreamKeyId) {
+    message.textContent = '请选择要绑定的上游 Key。';
+    return;
+  }
+  await api(`/api/own-sites/${form.own_site_id.value}/routes/${encodeURIComponent(form.route_id.value)}/manual-bind`, {
+    method: 'POST',
+    body: JSON.stringify({
+      upstream_site_id: Number(upstreamSiteId),
+      upstream_key_id: upstreamKeyId,
+      notes: '前端手动绑定'
+    })
+  });
+  document.querySelector('#bindOwnRouteDialog')?.close();
+  await loadOwnSitesAndRoutes();
 });
 document.querySelector('#createKeyForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
