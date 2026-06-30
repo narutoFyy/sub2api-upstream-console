@@ -33,6 +33,7 @@ http://localhost:4317
 - [备份说明](docs/BACKUP_CN.md)
 - [API Key 绑定分组展示需求](docs/API_KEY_GROUP_DISPLAY_REQUIREMENT_CN.md)
 - [自己站观测与上游路由映射需求](docs/OWN_SITE_OBSERVABILITY_REQUIREMENT_CN.md)
+- [UI 重构构思](docs/UI_REDESIGN_PLAN_CN.md)
 - [模型广场价格 TODO](docs/MODEL_PRICING_TODO_CN.md)
 - [代办清单](TODO_CN.md)
 

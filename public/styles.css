@@ -66,6 +66,43 @@ main {
   flex-wrap: wrap;
 }
 
+.main-nav {
+  position: sticky;
+  top: 12px;
+  z-index: 10;
+  display: flex;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 252, 244, 0.82);
+  box-shadow: 0 12px 32px rgba(74, 51, 24, 0.1);
+  backdrop-filter: blur(18px);
+  overflow-x: auto;
+}
+
+body.dark .main-nav {
+  background: rgba(31, 28, 22, 0.86);
+}
+
+.nav-item {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.nav-item.active {
+  color: #fffaf0;
+  background: var(--ink);
+  box-shadow: 0 10px 24px rgba(33, 27, 20, 0.18);
+}
+
+.view-section.view-hidden {
+  display: none !important;
+}
+
 .login-panel {
   max-width: 560px;
   margin: 10vh auto 0;

@@ -10,6 +10,7 @@
   details: new Map(),
   authEnabled: false,
   selectedDetailId: null,
+  activeView: localStorage.getItem('sub2api-active-view') || 'dashboard',
   filters: {
     search: '',
     tag: '',
@@ -29,6 +30,17 @@
     search: ''
   }
 };
+
+function setActiveView(view) {
+  state.activeView = view || 'dashboard';
+  localStorage.setItem('sub2api-active-view', state.activeView);
+  document.querySelectorAll('.nav-item').forEach((button) => {
+    button.classList.toggle('active', button.dataset.viewTarget === state.activeView);
+  });
+  document.querySelectorAll('.view-section').forEach((section) => {
+    section.classList.toggle('view-hidden', section.dataset.view !== state.activeView);
+  });
+}
 
 const fmt = new Intl.NumberFormat('zh-CN');
 const money = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 });
@@ -171,6 +183,7 @@ async function importConfigFile(file) {
     throw new Error('导入文件格式不正确：需要包含 sites 数组。');
   }
   const result = await api('/api/import', { method: 'POST', body: JSON.stringify({ sites: payload.sites }) });
+  setActiveView('logs');
   document.querySelector('#importPanel').hidden = false;
   document.querySelector('#importSummary').textContent = `已导入 ${result.imported} 个上游：按 Base URL 自动更新或新建。`;
   renderImportResults(result.results || []);
@@ -1090,6 +1103,7 @@ async function refresh() {
   populateKeyUpstreamFilters();
   await loadUpstreamKeys();
   await loadOwnSitesAndRoutes();
+  setActiveView(state.activeView);
   if (state.selectedDetailId && state.details.has(state.selectedDetailId)) {
     renderDetail(state.details.get(state.selectedDetailId));
   }
@@ -1168,6 +1182,12 @@ document.querySelector('#backupBtn').addEventListener('click', () => {
   window.location.href = '/api/backup/database';
 });
 
+document.querySelectorAll('.nav-item').forEach((button) => {
+  button.addEventListener('click', () => {
+    setActiveView(button.dataset.viewTarget);
+  });
+});
+
 document.querySelector('#upstreamForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const payload = getFormPayload();
@@ -1193,6 +1213,7 @@ document.querySelector('#testConnectionBtn').addEventListener('click', async (ev
 });
 
 document.querySelector('#resetFormBtn').addEventListener('click', () => {
+  setActiveView('upstreams');
   setForm();
 });
 
@@ -1224,6 +1245,7 @@ document.querySelector('#testOwnSiteBtn')?.addEventListener('click', async (even
 });
 
 document.querySelector('#resetOwnSiteFormBtn')?.addEventListener('click', () => {
+  setActiveView('own-sites');
   setOwnSiteForm();
 });
 
@@ -1239,6 +1261,7 @@ document.querySelector('#closeDetailBtn').addEventListener('click', () => {
 document.addEventListener('click', async (event) => {
   const detailId = event.target?.dataset?.detailId;
   if (detailId) {
+    setActiveView('upstreams');
     state.selectedDetailId = Number(detailId);
     const detail = await api(`/api/upstreams/${detailId}`);
     state.details.set(Number(detailId), detail);
@@ -1267,6 +1290,7 @@ document.addEventListener('click', async (event) => {
 
   const editId = event.target?.dataset?.editId;
   if (editId) {
+    setActiveView('upstreams');
     const detail = state.details.get(Number(editId)) || await api(`/api/upstreams/${editId}`);
     setForm(detail.site, detail.credentials);
     document.querySelector('#upstreamForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1323,6 +1347,7 @@ document.addEventListener('click', async (event) => {
 
   const openCreateKeyId = event.target?.dataset?.openCreateKey;
   if (openCreateKeyId) {
+    setActiveView('keys');
     openCreateKeyDialog(Number(openCreateKeyId));
   }
 
@@ -1359,6 +1384,7 @@ document.addEventListener('click', async (event) => {
 
   const ownEditId = event.target?.dataset?.ownEditId;
   if (ownEditId) {
+    setActiveView('own-sites');
     const detail = await api(`/api/own-sites/${ownEditId}`);
     setOwnSiteForm(detail.site, detail.credentials);
     document.querySelector('#ownSiteForm')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1415,7 +1441,10 @@ document.querySelector('#rateScopeFilter').addEventListener('change', (event) =>
   renderRates();
 });
 
-document.querySelector('#openCreateKeyBtn')?.addEventListener('click', () => openCreateKeyDialog());
+document.querySelector('#openCreateKeyBtn')?.addEventListener('click', () => {
+  setActiveView('keys');
+  openCreateKeyDialog();
+});
 document.querySelector('#refreshKeysBtn')?.addEventListener('click', async (event) => {
   await withButton(event.currentTarget, '刷新中...', loadUpstreamKeys);
 });
@@ -1436,10 +1465,12 @@ document.querySelector('#keySearchInput')?.addEventListener('input', (event) => 
   loadUpstreamKeys().catch(console.error);
 });
 document.querySelector('#ownRouteMatchFilter')?.addEventListener('change', (event) => {
+  setActiveView('own-sites');
   state.ownRouteFilters.matchStatus = event.target.value;
   loadOwnSitesAndRoutes().catch(console.error);
 });
 document.querySelector('#ownRouteSearchInput')?.addEventListener('input', (event) => {
+  setActiveView('own-sites');
   state.ownRouteFilters.search = event.target.value;
   loadOwnSitesAndRoutes().catch(console.error);
 });

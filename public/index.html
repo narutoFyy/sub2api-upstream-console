@@ -36,7 +36,16 @@
           </div>
         </section>
 
-        <section id="importPanel" class="panel import-panel" hidden>
+        <nav class="main-nav" aria-label="主导航">
+          <button class="nav-item active" type="button" data-view-target="dashboard">总览</button>
+          <button class="nav-item" type="button" data-view-target="upstreams">上游管理</button>
+          <button class="nav-item" type="button" data-view-target="keys">API Key</button>
+          <button class="nav-item" type="button" data-view-target="own-sites">自己站观测</button>
+          <button class="nav-item" type="button" data-view-target="pricing">模型价格</button>
+          <button class="nav-item" type="button" data-view-target="logs">倍率与日志</button>
+        </nav>
+
+        <section id="importPanel" class="panel import-panel view-section" data-view="logs" hidden>
           <div class="panel-title">
             <div>
               <h2>导入配置</h2>
@@ -47,9 +56,9 @@
           <div id="importResults" class="list"></div>
         </section>
 
-        <section class="cards" id="summaryCards"></section>
+        <section class="cards view-section" id="summaryCards" data-view="dashboard"></section>
 
-        <section id="rechargeAlertsPanel" class="panel compact-panel" hidden>
+        <section id="rechargeAlertsPanel" class="panel compact-panel view-section" data-view="dashboard" hidden>
           <div class="panel-title">
             <div>
               <h2>低余额充值提醒</h2>
@@ -59,7 +68,7 @@
           <div id="rechargeAlerts" class="list"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel view-section" data-view="upstreams">
           <div class="panel-title">
             <div>
               <h2 id="formTitle">新增上游</h2>
@@ -102,7 +111,7 @@
           <p id="formMessage" class="notice">站点标签只是给你自己分类；OpenAI / Anthropic 倍率会按 Sub2API 分组平台自动识别。</p>
         </section>
 
-        <section class="panel">
+        <section class="panel view-section" data-view="upstreams">
           <div class="panel-title">
             <div>
               <h2>上游列表</h2>
@@ -153,7 +162,7 @@
           </div>
         </section>
 
-        <section id="detailPanel" class="panel" hidden>
+        <section id="detailPanel" class="panel view-section" data-view="upstreams" hidden>
           <div class="panel-title">
             <div>
               <h2 id="detailTitle">上游详情</h2>
@@ -164,7 +173,7 @@
           <div id="detailContent"></div>
         </section>
 
-        <section class="panel" id="upstreamKeysPanel">
+        <section class="panel view-section" id="upstreamKeysPanel" data-view="keys">
           <div class="panel-title">
             <div>
               <h2>API Key 管理</h2>
@@ -215,7 +224,7 @@
           </div>
         </section>
 
-        <section class="panel" id="ownSitesPanel">
+        <section class="panel view-section" id="ownSitesPanel" data-view="own-sites">
           <div class="panel-title">
             <div>
               <h2>自己站观测</h2>
@@ -373,7 +382,7 @@
           </div>
         </dialog>
 
-        <section class="panel">
+        <section class="panel view-section" data-view="pricing">
           <div class="panel-title">
             <div>
               <h2>模型价格广场</h2>
@@ -383,7 +392,7 @@
           <div id="modelPricingBoard" class="pricing-board"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel view-section" data-view="logs">
           <div class="panel-title">
             <div>
               <h2>当前分组倍率</h2>
@@ -401,7 +410,7 @@
           <div id="rateGrid" class="rate-grid"></div>
         </section>
 
-        <section class="split">
+        <section class="split view-section" data-view="logs">
           <div class="panel">
             <h2>倍率变化</h2>
             <div id="rateChanges" class="list"></div>
