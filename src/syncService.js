@@ -1,6 +1,7 @@
 const repo = require('./repository');
 const { fetchSub2APIState } = require('./upstreamClient');
 const { nowIso } = require('./utils');
+const { evaluateSiteAlerts } = require('./alertService');
 
 function rechargeSummary(snapshot) {
   const multiplier = Number(snapshot?.balance_recharge_multiplier);
@@ -34,9 +35,15 @@ async function syncSite(siteId) {
       null,
       `balance=${result.snapshot.balance ?? 'n/a'}, rates=${result.rates.length}, modelPricing=${result.model_pricing?.length || 0}, keys=${result.keys.length}, todayTokens=${result.snapshot.today_tokens}, ${rechargeSummary(result.snapshot)}`
     );
+    evaluateSiteAlerts(siteId).catch((error) => {
+      console.error(`Site alert delivery failed for upstream ${siteId}:`, error.message);
+    });
     return result;
   } catch (err) {
     repo.saveSyncLog(siteId, 'full', startedAt, 'failed', err);
+    evaluateSiteAlerts(siteId).catch((error) => {
+      console.error(`Site alert delivery failed for upstream ${siteId}:`, error.message);
+    });
     throw err;
   }
 }

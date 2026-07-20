@@ -23,8 +23,15 @@ CREATE TABLE IF NOT EXISTS upstream_sites (
   low_balance_threshold REAL NOT NULL DEFAULT 10,
   rate_change_threshold_percent REAL NOT NULL DEFAULT 20,
   sync_interval_seconds INTEGER NOT NULL DEFAULT 180,
+  key_check_interval_seconds INTEGER NOT NULL DEFAULT 300,
+  openai_probe_model TEXT NOT NULL DEFAULT '',
+  anthropic_probe_model TEXT NOT NULL DEFAULT '',
   last_sync_at TEXT,
   last_sync_error TEXT NOT NULL DEFAULT '',
+  sync_failure_count INTEGER NOT NULL DEFAULT 0,
+  sync_success_count INTEGER NOT NULL DEFAULT 0,
+  last_key_import_at TEXT,
+  last_key_check_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -259,6 +266,86 @@ CREATE TABLE IF NOT EXISTS upstream_key_create_logs (
 
 CREATE INDEX IF NOT EXISTS idx_upstream_key_create_logs_site ON upstream_key_create_logs(upstream_site_id, created_at);
 
+CREATE TABLE IF NOT EXISTS upstream_key_import_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upstream_site_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  pages INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  added INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL DEFAULT 0,
+  missing INTEGER NOT NULL DEFAULT 0,
+  group_changes INTEGER NOT NULL DEFAULT 0,
+  full_key_count INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_upstream_key_import_runs_site ON upstream_key_import_runs(upstream_site_id, started_at);
+
+CREATE TABLE IF NOT EXISTS upstream_key_connectivity_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upstream_site_id INTEGER NOT NULL,
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  probe_level TEXT NOT NULL DEFAULT 'inference',
+  platform TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  latency_ms INTEGER,
+  http_status INTEGER,
+  error_code TEXT NOT NULL DEFAULT '',
+  error_message TEXT NOT NULL DEFAULT '',
+  checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_key_checks_site_key_time
+  ON upstream_key_connectivity_checks(upstream_site_id, upstream_key_id, checked_at);
+
+CREATE TABLE IF NOT EXISTS upstream_key_connectivity_state (
+  upstream_site_id INTEGER NOT NULL,
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'untested',
+  probe_level TEXT NOT NULL DEFAULT 'inference',
+  platform TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  latency_ms INTEGER,
+  http_status INTEGER,
+  error_code TEXT NOT NULL DEFAULT '',
+  error_message TEXT NOT NULL DEFAULT '',
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  consecutive_successes INTEGER NOT NULL DEFAULT 0,
+  last_checked_at TEXT,
+  last_success_at TEXT,
+  last_failure_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (upstream_site_id, upstream_key_id),
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  fingerprint TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'warning',
+  status TEXT NOT NULL DEFAULT 'open',
+  upstream_site_id INTEGER,
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  notified_at TEXT,
+  resolved_at TEXT,
+  recovery_notified_at TEXT,
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_status_time ON alert_events(status, opened_at);
+CREATE INDEX IF NOT EXISTS idx_alert_events_fingerprint ON alert_events(fingerprint, status);
+
 CREATE TABLE IF NOT EXISTS own_sites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -338,6 +425,13 @@ ensureColumn('upstream_sites', 'codex_aliases', `TEXT NOT NULL DEFAULT '["codex"
 ensureColumn('upstream_sites', 'upstream_type', `TEXT NOT NULL DEFAULT 'auto'`);
 ensureColumn('upstream_sites', 'low_balance_threshold', 'REAL NOT NULL DEFAULT 10');
 ensureColumn('upstream_sites', 'rate_change_threshold_percent', 'REAL NOT NULL DEFAULT 20');
+ensureColumn('upstream_sites', 'key_check_interval_seconds', 'INTEGER NOT NULL DEFAULT 300');
+ensureColumn('upstream_sites', 'openai_probe_model', `TEXT NOT NULL DEFAULT ''`);
+ensureColumn('upstream_sites', 'anthropic_probe_model', `TEXT NOT NULL DEFAULT ''`);
+ensureColumn('upstream_sites', 'last_key_import_at', 'TEXT');
+ensureColumn('upstream_sites', 'last_key_check_at', 'TEXT');
+ensureColumn('upstream_sites', 'sync_failure_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_sites', 'sync_success_count', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'week_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'week_cost', 'REAL NOT NULL DEFAULT 0');
@@ -383,6 +477,10 @@ ensureColumn('model_pricing_snapshots', 'upstream_cache_read_usd_per_1m', 'REAL'
 ensureColumn('model_pricing_snapshots', 'upstream_cache_write_usd_per_1m', 'REAL');
 ensureColumn('model_pricing_snapshots', 'upstream_request_usd', 'REAL');
 ensureColumn('upstream_api_key_snapshots', 'group_rate', 'REAL');
+ensureColumn('upstream_api_key_snapshots', 'first_seen_at', 'TEXT');
+ensureColumn('upstream_api_key_snapshots', 'last_seen_at', 'TEXT');
+ensureColumn('upstream_api_key_snapshots', 'missing_since', 'TEXT');
+ensureColumn('upstream_api_key_snapshots', 'import_state', `TEXT NOT NULL DEFAULT 'present'`);
 ensureColumn('own_site_route_snapshots', 'upstream_buy_rate', 'REAL');
 
 module.exports = db;

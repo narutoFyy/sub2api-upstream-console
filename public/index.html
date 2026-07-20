@@ -3,425 +3,231 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sub2API Upstream Console</title>
+    <meta name="color-scheme" content="light dark" />
+    <title>Upstream Control</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/vendor/lucide/lucide.min.js" defer></script>
+    <script src="/app.js" defer></script>
   </head>
   <body>
-    <main id="app">
-      <section id="loginPanel" class="panel login-panel" hidden>
-        <p class="eyebrow">Private console</p>
-        <h1>登录控制台</h1>
-        <p class="subtitle">输入本地配置的管理密码后再查看上游账号、余额和倍率。</p>
-        <form id="loginForm" class="login-form">
-          <input name="password" type="password" placeholder="控制台密码" autocomplete="current-password" required />
-          <button class="primary" type="submit">进入控制台</button>
-        </form>
-      </section>
+    <section id="loginScreen" class="login-screen" hidden>
+      <form id="loginForm" class="login-box">
+        <div class="brand-mark"><i data-lucide="activity"></i></div>
+        <h1>Upstream Control</h1>
+        <label>
+          <span>控制台密码</span>
+          <input name="password" type="password" autocomplete="current-password" required autofocus />
+        </label>
+        <button class="btn primary full" type="submit">登录</button>
+        <p id="loginMessage" class="form-message" aria-live="polite"></p>
+      </form>
+    </section>
 
-      <div id="consoleShell" hidden>
-        <section class="hero">
-          <div>
-            <p class="eyebrow">Independent upstream observatory</p>
-            <h1>Sub2API 上游聚合控制台</h1>
-            <p class="subtitle">集中查看上游余额、用量、分组倍率和同步状态。把分散的上游账号变成一张可行动的管理地图。</p>
-          </div>
-          <div class="hero-actions">
-            <button id="syncAllBtn" class="primary">同步全部上游</button>
-            <button id="themeBtn" class="ghost">切换主题</button>
-            <button id="exportBtn" class="ghost">导出配置</button>
-            <button id="importBtn" class="ghost" type="button">导入配置</button>
-            <input id="importFileInput" type="file" accept="application/json,.json" hidden />
-            <button id="backupBtn" class="ghost">备份数据库</button>
-            <button id="logoutBtn" class="ghost" hidden>退出</button>
-          </div>
-        </section>
+    <div id="appShell" class="app-shell" hidden>
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+          <span class="brand-icon"><i data-lucide="activity"></i></span>
+          <strong>Upstream Control</strong>
+          <button class="icon-btn sidebar-close" id="sidebarCloseBtn" type="button" aria-label="关闭导航"><i data-lucide="x"></i></button>
+        </div>
 
-        <nav class="main-nav" aria-label="主导航">
-          <button class="nav-item active" type="button" data-view-target="dashboard">总览</button>
-          <button class="nav-item" type="button" data-view-target="upstreams">上游管理</button>
-          <button class="nav-item" type="button" data-view-target="keys">API Key</button>
-          <button class="nav-item" type="button" data-view-target="own-sites">自己站观测</button>
-          <button class="nav-item" type="button" data-view-target="pricing">模型价格</button>
-          <button class="nav-item" type="button" data-view-target="logs">倍率与日志</button>
+        <nav class="sidebar-nav" aria-label="主导航">
+          <button class="nav-link" type="button" data-view-target="overview"><i data-lucide="gauge"></i><span>总览</span></button>
+          <button class="nav-link active" type="button" data-view-target="monitoring"><i data-lucide="chart-no-axes-combined"></i><span>上游监控</span></button>
+          <button class="nav-link" type="button" data-view-target="keys"><i data-lucide="key-round"></i><span>Key 管理</span></button>
+          <button class="nav-link" type="button" data-view-target="own-sites"><i data-lucide="route"></i><span>自己站观测</span></button>
+
+          <span class="nav-label">分析</span>
+          <button class="nav-link" type="button" data-view-target="pricing"><i data-lucide="badge-dollar-sign"></i><span>模型价格</span></button>
+          <button class="nav-link" type="button" data-view-target="alerts"><i data-lucide="bell"></i><span>告警事件</span><span id="sidebarAlertCount" class="nav-count" hidden></span></button>
+
+          <span class="nav-label">系统</span>
+          <button class="nav-link" type="button" data-view-target="logs"><i data-lucide="file-clock"></i><span>同步记录</span></button>
+          <button class="nav-link" type="button" data-view-target="settings"><i data-lucide="settings"></i><span>设置</span></button>
         </nav>
 
-        <section id="importPanel" class="panel import-panel view-section" data-view="logs" hidden>
-          <div class="panel-title">
-            <div>
-              <h2>导入配置</h2>
-              <p id="importSummary">选择从本控制台导出的 JSON 文件，系统会按 Base URL 更新或新建上游。</p>
-            </div>
-            <button id="closeImportBtn" class="ghost" type="button">关闭</button>
-          </div>
-          <div id="importResults" class="list"></div>
-        </section>
+        <div class="sidebar-footer">
+          <button class="nav-link" id="sidebarCollapseBtn" type="button"><i data-lucide="circle-chevron-left"></i><span>收起</span></button>
+        </div>
+      </aside>
 
-        <section class="cards view-section" id="summaryCards" data-view="dashboard"></section>
+      <main class="main-shell">
+        <header class="topbar">
+          <div class="topbar-title-wrap">
+            <button class="icon-btn mobile-menu" id="mobileMenuBtn" type="button" aria-label="打开导航"><i data-lucide="menu"></i></button>
+            <h1 id="pageTitle">上游监控</h1>
+          </div>
+          <label class="global-search">
+            <i data-lucide="search"></i>
+            <input id="globalSearchInput" type="search" placeholder="搜索上游或 Key" />
+          </label>
+          <div class="topbar-actions">
+            <button id="pushPlusBadge" class="connection-badge" type="button" data-action="pushplus-test">
+              <span class="status-dot neutral"></span>
+              <span>PushPlus 未配置</span>
+            </button>
+            <button id="refreshBtn" class="icon-btn bordered" type="button" aria-label="刷新" title="刷新"><i data-lucide="refresh-cw"></i></button>
+            <button id="syncAllBtn" class="btn primary" type="button"><i data-lucide="refresh-cw"></i><span>同步全部</span></button>
+          </div>
+        </header>
 
-        <section id="rechargeAlertsPanel" class="panel compact-panel view-section" data-view="dashboard" hidden>
-          <div class="panel-title">
-            <div>
-              <h2>低余额充值提醒</h2>
-              <p>只展示官方接口可用的充值方式；没有官方方式的上游会标记为不支持在线充值。</p>
+        <div class="content-shell">
+          <section class="view" data-view="overview" hidden>
+            <div class="page-heading">
+              <div><h2>总览</h2></div>
+              <button class="btn secondary" type="button" data-action="open-upstream-dialog"><i data-lucide="plus"></i>新增上游</button>
             </div>
-          </div>
-          <div id="rechargeAlerts" class="list"></div>
-        </section>
+            <div id="overviewMetrics" class="metric-strip"></div>
+            <div class="overview-grid">
+              <section class="surface">
+                <div class="surface-title"><h3>当前告警</h3><button class="text-btn" data-view-link="alerts">查看全部</button></div>
+                <div id="overviewAlerts" class="event-list"></div>
+              </section>
+              <section class="surface">
+                <div class="surface-title"><h3>余额预警</h3><button class="text-btn" data-view-link="monitoring">打开监控</button></div>
+                <div id="overviewBalances" class="event-list"></div>
+              </section>
+            </div>
+          </section>
 
-        <section class="panel view-section" data-view="upstreams">
-          <div class="panel-title">
-            <div>
-              <h2 id="formTitle">新增上游</h2>
-              <p>凭证会加密保存，前端不会回显完整密码。可以先测试连接，再保存。</p>
-            </div>
-            <button id="resetFormBtn" class="ghost" type="button">清空表单</button>
-          </div>
-          <form id="upstreamForm" class="grid-form">
-            <input name="id" type="hidden" />
-            <label>名称<input name="name" value="Stone API" required /></label>
-            <label>Base URL<input name="base_url" value="https://www.shitoutk.com" required /></label>
-            <label>&#19978;&#28216;&#31867;&#22411;
-              <select name="upstream_type">
-                <option value="auto">&#33258;&#21160;&#35782;&#21035;</option>
-                <option value="sub2api">Sub2API</option>
-                <option value="new-api">new-api</option>
-              </select>
-            </label>
-            <label>认证模式
-              <select name="auth_mode">
-                <option value="password">账号密码</option>
-                <option value="token">Token</option>
-                <option value="api_key">API Key</option>
-                <option value="admin">管理员 Token</option>
-              </select>
-            </label>
-            <label>邮箱<input name="email" type="email" placeholder="you@example.com" /></label>
-            <label>密码<input name="password" type="password" placeholder="新增或修改时填写" autocomplete="new-password" /></label>
-            <label>Token<input name="token" type="password" placeholder="Token 模式可填写" autocomplete="new-password" /></label>
-            <label>站点标签（可选）<input name="tags" placeholder="例如：备用,低价,稳定" /></label>
-            <label>低余额阈值<input name="low_balance_threshold" type="number" step="0.0001" value="10" /></label>
-            <label>倍率变化阈值 %<input name="rate_change_threshold_percent" type="number" step="0.1" value="20" /></label>
-            <label>同步频率秒<input name="sync_interval_seconds" type="number" min="30" value="180" /></label>
-            <label>备注<input name="notes" placeholder="例如：OpenAI 倍率低，备用线路" /></label>
-            <div class="form-actions">
-              <button id="testConnectionBtn" class="ghost" type="button">测试连接</button>
-              <button class="secondary" type="submit">保存上游</button>
-            </div>
-          </form>
-          <p id="formMessage" class="notice">站点标签只是给你自己分类；OpenAI / Anthropic 倍率会按 Sub2API 分组平台自动识别。</p>
-        </section>
+          <section class="view" data-view="monitoring">
+            <div id="monitoringMetrics" class="metric-strip"></div>
 
-        <section class="panel view-section" data-view="upstreams">
-          <div class="panel-title">
-            <div>
-              <h2>上游列表</h2>
-              <p id="lastUpdated">等待加载...</p>
-            </div>
-            <div class="toolbar">
-              <input id="searchInput" placeholder="搜索名称、网址、标签" />
-              <input id="tagFilterInput" placeholder="标签筛选" />
-              <select id="statusFilter">
-                <option value="">全部状态</option>
-                <option value="active">正常</option>
-                <option value="login_failed">登录失败</option>
-                <option value="sync_failed">同步失败</option>
-                <option value="low_balance">余额不足</option>
-                <option value="stale">长期未同步</option>
-                <option value="rate_changed">倍率变化</option>
-                <option value="disabled">已停用</option>
-              </select>
-              <select id="sortSelect">
-                <option value="id_desc">最新添加</option>
-                <option value="balance_asc">余额从低到高</option>
-                <option value="tokens_desc">今日 Token 从高到低</option>
-                <option value="sync_desc">最近同步</option>
-                <option value="rate_asc">最低倍率从低到高</option>
-              </select>
-            </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>上游</th>
-                  <th>状态</th>
-                  <th>余额</th>
-                  <th>充值</th>
-                  <th>今日 Token</th>
-                  <th>今日成本</th>
-                  <th>订阅</th>
-                  <th>OpenAI 倍率</th>
-                  <th>Anthropic 倍率</th>
-                  <th>倍率范围</th>
-                  <th>同步</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="upstreamRows"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section id="detailPanel" class="panel view-section" data-view="upstreams" hidden>
-          <div class="panel-title">
-            <div>
-              <h2 id="detailTitle">上游详情</h2>
-              <p id="detailSubtitle">余额、用量、能力矩阵、趋势和最近同步记录。</p>
-            </div>
-            <button id="closeDetailBtn" class="ghost">关闭详情</button>
-          </div>
-          <div id="detailContent"></div>
-        </section>
-
-        <section class="panel view-section" id="upstreamKeysPanel" data-view="keys">
-          <div class="panel-title">
-            <div>
-              <h2>API Key 管理</h2>
-              <p>跨上游查看和创建 API Key。创建时选择分组即可决定 OpenAI / Claude 等线路，无需逐个登录上游网站。</p>
-            </div>
-            <div class="toolbar">
-              <button id="openCreateKeyBtn" class="primary" type="button">创建 Key</button>
-              <button id="refreshKeysBtn" class="ghost" type="button">刷新列表</button>
-            </div>
-          </div>
-          <div class="toolbar key-toolbar">
-            <select id="keyUpstreamFilter">
-              <option value="">全部上游</option>
-            </select>
-            <select id="keyPlatformFilter">
-              <option value="">全部平台</option>
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic / Claude</option>
-              <option value="gemini">Gemini</option>
-              <option value="antigravity">Antigravity</option>
-            </select>
-            <select id="keyStatusFilter">
-              <option value="">全部状态</option>
-              <option value="active">启用</option>
-              <option value="inactive">停用</option>
-            </select>
-            <input id="keySearchInput" placeholder="搜索 Key 名称或分组" />
-          </div>
-          <div id="upstreamKeysErrors" class="notice" hidden></div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>上游</th>
-                  <th>名称</th>
-                  <th>Key</th>
-                  <th>分组</th>
-                  <th>平台</th>
-                  <th>分组倍率</th>
-                  <th>状态</th>
-                  <th>配额</th>
-                  <th>最后使用</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="upstreamKeyRows"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="panel view-section" id="ownSitesPanel" data-view="own-sites">
-          <div class="panel-title">
-            <div>
-              <h2>自己站观测</h2>
-              <p>把你自己的中转站也纳入观察：查看每条渠道接了哪个上游 API、哪条上游 Key，以及对应分组倍率。</p>
-            </div>
-            <div class="toolbar">
-              <button id="resetOwnSiteFormBtn" class="ghost" type="button">新增自己站</button>
-              <button id="refreshOwnSitesBtn" class="ghost" type="button">刷新自己站</button>
-            </div>
-          </div>
-          <form id="ownSiteForm" class="grid-form">
-            <input name="id" type="hidden" />
-            <label>名称<input name="name" placeholder="例如：我的 API 中转站" required /></label>
-            <label>Base URL<input name="base_url" placeholder="https://api.example.com" required /></label>
-            <label>站点类型
-              <select name="own_site_type">
-                <option value="auto">自动识别</option>
-                <option value="sub2api">Sub2API</option>
-                <option value="new-api">new-api</option>
-              </select>
-            </label>
-            <label>认证模式
-              <select name="auth_mode">
-                <option value="token">Token</option>
-                <option value="password">账号密码</option>
-                <option value="admin">管理员 Token</option>
-              </select>
-            </label>
-            <label>邮箱<input name="email" type="email" placeholder="账号密码模式可填" /></label>
-            <label>密码<input name="password" type="password" placeholder="修改时留空则保留" autocomplete="new-password" /></label>
-            <label>Token<input name="token" type="password" placeholder="推荐填写管理 Token" autocomplete="new-password" /></label>
-            <label>备注<input name="notes" placeholder="例如：生产站，只读观察" /></label>
-            <div class="form-actions">
-              <button id="testOwnSiteBtn" class="ghost" type="button">测试读取渠道</button>
-              <button class="secondary" type="submit">保存自己站</button>
-            </div>
-          </form>
-          <p id="ownSiteMessage" class="notice">第一版只做只读观测，不会修改你自己站的路由配置。</p>
-          <div class="split own-site-split">
-            <div>
-              <h3>自己站列表</h3>
-              <div id="ownSiteList" class="list"></div>
-            </div>
-            <div>
-              <h3>路由映射筛选</h3>
-              <div class="toolbar own-route-toolbar">
-                <select id="ownRouteMatchFilter">
-                  <option value="">全部映射</option>
-                  <option value="matched">已匹配</option>
-                  <option value="unmatched">未匹配</option>
+            <div class="filter-row">
+              <div id="monitorStatusSegments" class="segment-control" role="group" aria-label="状态筛选">
+                <button class="active" type="button" data-monitor-status="all">全部 <strong id="segmentAllCount">0</strong></button>
+                <button type="button" data-monitor-status="healthy"><span class="status-dot healthy"></span>正常 <strong id="segmentHealthyCount">0</strong></button>
+                <button type="button" data-monitor-status="low"><span class="status-dot warning"></span>余额预警 <strong id="segmentLowCount">0</strong></button>
+                <button type="button" data-monitor-status="key-error"><span class="status-dot danger"></span>Key 异常 <strong id="segmentKeyErrorCount">0</strong></button>
+              </div>
+              <div class="filter-actions">
+                <button class="btn secondary" type="button" data-action="open-upstream-dialog"><i data-lucide="plus"></i>新增上游</button>
+                <select id="monitorSortSelect" aria-label="上游排序">
+                  <option value="balance-asc">按余额升序</option>
+                  <option value="balance-desc">按余额降序</option>
+                  <option value="abnormal-desc">按异常数量</option>
+                  <option value="name-asc">按名称</option>
                 </select>
-                <input id="ownRouteSearchInput" placeholder="搜索模型、上游、Key" />
               </div>
-              <p class="notice">匹配不到时会显示原因，可后续通过手动绑定兜底。</p>
             </div>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>自己站 / 渠道</th>
-                  <th>上游 API</th>
-                  <th>匹配上游</th>
-                  <th>上游 Key</th>
-                  <th>绑定分组</th>
-                  <th>平台</th>
-                  <th>上游给我们</th>
-                  <th>我们卖出</th>
-                  <th>倍率差</th>
-                  <th>状态 / 原因</th>
-                </tr>
-              </thead>
-              <tbody id="ownRouteRows"></tbody>
-            </table>
-          </div>
-        </section>
 
-        <dialog id="createKeyDialog" class="key-dialog">
-          <form id="createKeyForm" method="dialog" class="key-dialog-body">
-            <div class="panel-title">
-              <div>
-                <h2>创建上游 API Key</h2>
-                <p>先选上游，再选分组。分组决定该 Key 走 OpenAI、Claude 还是其他线路。</p>
+            <section class="table-section">
+              <div class="table-section-title"><h2>上游列表</h2></div>
+              <div class="table-scroll">
+                <table class="data-table upstream-table">
+                  <thead>
+                    <tr><th>上游</th><th>余额</th><th>上游状态</th><th>Key</th><th>Key 异常</th><th>最近同步</th><th class="align-right">操作</th></tr>
+                  </thead>
+                  <tbody id="monitoringRows"></tbody>
+                </table>
               </div>
-              <button type="button" id="closeCreateKeyBtn" class="ghost">关闭</button>
-            </div>
-            <label>上游
-              <select name="upstream_site_id" id="createKeyUpstreamSelect" required></select>
-            </label>
-            <label>分组
-              <select name="group_id" id="createKeyGroupSelect" required disabled>
-                <option value="">请先选择上游</option>
-              </select>
-            </label>
-            <label>Key 名称
-              <input name="name" required placeholder="例如：本地 Codex / Claude Code" />
-            </label>
-            <label>平台筛选（仅影响分组下拉）
-              <select id="createKeyPlatformFilter">
-                <option value="">全部分组</option>
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic / Claude</option>
-                <option value="gemini">Gemini</option>
-                <option value="antigravity">Antigravity</option>
-              </select>
-            </label>
-            <label>配额 USD（可选，留空表示不限）
-              <input name="quota" type="number" min="0" step="0.01" placeholder="不限" />
-            </label>
-            <label>过期天数（可选）
-              <input name="expires_in_days" type="number" min="1" step="1" placeholder="永不过期" />
-            </label>
-            <p id="createKeyMessage" class="notice"></p>
-            <div class="form-actions">
-              <button type="submit" class="primary">创建 Key</button>
-            </div>
-          </form>
-        </dialog>
+            </section>
+          </section>
 
-        <dialog id="bindOwnRouteDialog" class="key-dialog">
-          <form id="bindOwnRouteForm" method="dialog" class="key-dialog-body">
-            <div class="panel-title">
-              <div>
-                <h2>绑定上游 Key</h2>
-                <p>用于确认这条自己站账号实际接入了哪条上游 Key，从而读取正确的上游采购倍率。</p>
+          <section class="view" data-view="keys" hidden>
+            <div class="page-heading">
+              <div><h2>Key 管理</h2></div>
+              <button class="btn primary" type="button" data-action="open-create-key"><i data-lucide="plus"></i>创建 Key</button>
+            </div>
+            <div class="filter-row compact">
+              <div class="inline-filters">
+                <select id="keyUpstreamFilter"><option value="">全部上游</option></select>
+                <select id="keyPlatformFilter"><option value="">全部平台</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select>
+                <select id="keyHealthFilter"><option value="">全部联通状态</option><option value="connected">联通</option><option value="failed">异常</option><option value="untested">未检测</option></select>
               </div>
-              <button type="button" id="closeBindOwnRouteBtn" class="ghost">关闭</button>
             </div>
-            <input name="own_site_id" type="hidden" />
-            <input name="route_id" type="hidden" />
-            <label>选择上游 Key
-              <select name="binding" id="bindOwnRouteKeySelect" required></select>
-            </label>
-            <p id="bindOwnRouteMessage" class="notice"></p>
-            <div class="form-actions">
-              <button type="submit" class="primary">保存绑定</button>
-            </div>
-          </form>
-        </dialog>
+            <section class="table-section"><div class="table-scroll"><table class="data-table"><thead><tr><th>上游</th><th>Key 名称</th><th>Key</th><th>所属分组</th><th>平台</th><th>倍率</th><th>联通性</th><th>最后检测</th><th class="align-right">操作</th></tr></thead><tbody id="globalKeyRows"></tbody></table></div></section>
+          </section>
 
-        <dialog id="createdKeyDialog" class="key-dialog">
-          <div class="key-dialog-body">
-            <div class="panel-title">
-              <div>
-                <h2>Key 创建成功</h2>
-                <p>完整密钥只会显示这一次，请立即复制保存。</p>
-              </div>
-              <button type="button" id="closeCreatedKeyBtn" class="ghost">关闭</button>
-            </div>
-            <div class="created-key-box">
-              <code id="createdKeyValue"></code>
-              <button type="button" id="copyCreatedKeyBtn" class="secondary">复制 Key</button>
-            </div>
-            <p id="createdKeyMeta" class="detail-note"></p>
-          </div>
-        </dialog>
+          <section class="view" data-view="own-sites" hidden>
+            <div class="page-heading"><div><h2>自己站观测</h2></div><button class="btn primary" type="button" data-action="open-own-site"><i data-lucide="plus"></i>新增自己站</button></div>
+            <section class="table-section"><div class="table-scroll"><table class="data-table"><thead><tr><th>自己站</th><th>状态</th><th>账号数</th><th>已匹配</th><th>未匹配</th><th>最近同步</th><th class="align-right">操作</th></tr></thead><tbody id="ownSiteRows"></tbody></table></div></section>
+            <section class="table-section spaced"><div class="table-section-title"><h2>进销倍率对账</h2></div><div class="table-scroll"><table class="data-table"><thead><tr><th>自己站账号</th><th>接入上游 API</th><th>匹配上游</th><th>绑定 Key</th><th>采购倍率</th><th>售卖分组</th><th>售卖倍率</th><th>倍率差</th><th>状态</th><th class="align-right">操作</th></tr></thead><tbody id="ownRouteRows"></tbody></table></div></section>
+          </section>
 
-        <section class="panel view-section" data-view="pricing">
-          <div class="panel-title">
-            <div>
-              <h2>模型价格广场</h2>
-              <p>按 OpenAI 和 Claude 分区展示重点监控模型的官方原价，并对比各上游折算后的实际价格。OpenAI 仅展示 GPT-5.4 / GPT-5.5；Claude 仅展示 Opus 4-6/4-7/4-8、Sonnet 4-6、Fable 5。</p>
-            </div>
-          </div>
-          <div id="modelPricingBoard" class="pricing-board"></div>
-        </section>
+          <section class="view" data-view="pricing" hidden>
+            <div class="page-heading"><div><h2>模型价格</h2></div></div>
+            <div id="pricingBoard" class="pricing-board"></div>
+          </section>
 
-        <section class="panel view-section" data-view="logs">
-          <div class="panel-title">
-            <div>
-              <h2>当前分组倍率</h2>
-              <p>跨上游汇总展示，每张倍率卡片都会标出所属上游。可筛选 OpenAI 和 Anthropic。</p>
-            </div>
-            <div class="toolbar">
-              <input id="rateSearchInput" placeholder="搜索倍率分组" />
-              <select id="rateScopeFilter">
-                <option value="">全部倍率</option>
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-              </select>
-            </div>
-          </div>
-          <div id="rateGrid" class="rate-grid"></div>
-        </section>
+          <section class="view" data-view="alerts" hidden>
+            <div class="page-heading"><div><h2>告警事件</h2></div><select id="alertStatusFilter"><option value="">全部事件</option><option value="open">处理中</option><option value="resolved">已恢复</option></select></div>
+            <section class="table-section"><div class="table-scroll"><table class="data-table"><thead><tr><th>状态</th><th>事件</th><th>上游</th><th>Key</th><th>严重程度</th><th>发生时间</th><th>通知</th></tr></thead><tbody id="alertRows"></tbody></table></div></section>
+          </section>
 
-        <section class="split view-section" data-view="logs">
-          <div class="panel">
-            <h2>倍率变化</h2>
-            <div id="rateChanges" class="list"></div>
-          </div>
-          <div class="panel">
-            <h2>同步日志</h2>
-            <div id="syncLogs" class="list"></div>
-          </div>
-        </section>
-      </div>
-    </main>
-    <script src="/app.js"></script>
+          <section class="view" data-view="logs" hidden>
+            <div class="page-heading"><div><h2>同步记录</h2></div></div>
+            <div class="log-layout">
+              <section class="surface"><div class="surface-title"><h3>同步日志</h3></div><div id="syncLogList" class="event-list dense"></div></section>
+              <section class="surface"><div class="surface-title"><h3>倍率变化</h3></div><div id="rateChangeList" class="event-list dense"></div></section>
+            </div>
+          </section>
+
+          <section class="view" data-view="settings" hidden>
+            <div class="page-heading"><div><h2>设置</h2></div></div>
+            <div class="settings-grid">
+              <section class="surface setting-section"><div><h3>PushPlus</h3><p id="pushPlusSettingStatus" class="muted">未配置</p></div><button class="btn secondary" type="button" data-action="pushplus-test"><i data-lucide="send"></i>发送测试</button></section>
+              <section class="surface setting-section"><div><h3>外观</h3><p class="muted">当前主题</p></div><button id="themeToggleBtn" class="btn secondary" type="button"><i data-lucide="moon"></i>切换主题</button></section>
+              <section class="surface setting-section"><div><h3>配置文件</h3><p class="muted">导入或导出上游配置</p></div><div class="button-group"><button class="btn secondary" type="button" data-action="export-config"><i data-lucide="download"></i>导出</button><button class="btn secondary" type="button" data-action="import-config"><i data-lucide="upload"></i>导入</button></div></section>
+              <section class="surface setting-section"><div><h3>数据库</h3><p class="muted">下载 SQLite 备份</p></div><button class="btn secondary" type="button" data-action="backup-database"><i data-lucide="database-backup"></i>备份</button></section>
+              <section class="surface setting-section"><div><h3>会话</h3><p class="muted">退出当前控制台</p></div><button class="btn danger-outline" type="button" data-action="logout"><i data-lucide="log-out"></i>退出</button></section>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="upstreamDialog" class="modal">
+      <form id="upstreamForm" class="modal-body">
+        <div class="modal-header"><div><h2 id="upstreamDialogTitle">新增上游</h2></div><button class="icon-btn" type="button" data-close-dialog="upstreamDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+        <input name="id" type="hidden" />
+        <div class="form-grid">
+          <label><span>名称</span><input name="name" required /></label>
+          <label><span>Base URL</span><input name="base_url" type="url" required /></label>
+          <label><span>上游类型</span><select name="upstream_type"><option value="auto">自动识别</option><option value="sub2api">Sub2API</option><option value="new-api">New API</option></select></label>
+          <label><span>认证模式</span><select name="auth_mode"><option value="password">账号密码</option><option value="token">Token</option><option value="api_key">API Key</option><option value="admin">管理员 Token</option></select></label>
+          <label><span>邮箱</span><input name="email" type="email" /></label>
+          <label><span>密码</span><input name="password" type="password" autocomplete="new-password" /></label>
+          <label class="span-2"><span>Token</span><input name="token" type="password" autocomplete="new-password" /></label>
+          <label><span>低余额阈值</span><input name="low_balance_threshold" type="number" step="0.0001" value="10" /></label>
+          <label><span>同步频率（秒）</span><input name="sync_interval_seconds" type="number" min="30" value="180" /></label>
+          <label><span>Key 检测频率（秒）</span><input name="key_check_interval_seconds" type="number" min="60" value="300" /></label>
+          <label><span>倍率变化阈值 %</span><input name="rate_change_threshold_percent" type="number" min="0" value="20" /></label>
+          <label><span>OpenAI 检测模型</span><input name="openai_probe_model" placeholder="例如低成本模型" /></label>
+          <label><span>Anthropic 检测模型</span><input name="anthropic_probe_model" placeholder="例如低成本模型" /></label>
+          <label class="span-2"><span>标签</span><input name="tags" placeholder="备用,低价,稳定" /></label>
+          <label class="span-2"><span>备注</span><textarea name="notes" rows="3"></textarea></label>
+        </div>
+        <p id="upstreamFormMessage" class="form-message" aria-live="polite"></p>
+        <div class="modal-actions"><button id="testUpstreamBtn" class="btn secondary" type="button"><i data-lucide="plug-zap"></i>测试连接</button><button class="btn primary" type="submit">保存</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="detailDialog" class="drawer-dialog"><div class="drawer-shell"><div class="modal-header"><div><h2 id="detailTitle">上游详情</h2><p id="detailSubtitle" class="muted"></p></div><button class="icon-btn" type="button" data-close-dialog="detailDialog" aria-label="关闭"><i data-lucide="x"></i></button></div><div id="detailContent" class="drawer-content"></div></div></dialog>
+
+    <dialog id="createKeyDialog" class="modal small-modal">
+      <form id="createKeyForm" class="modal-body">
+        <div class="modal-header"><h2>创建 Key</h2><button class="icon-btn" type="button" data-close-dialog="createKeyDialog" aria-label="关闭"><i data-lucide="x"></i></button></div>
+        <label><span>上游</span><select name="upstream_site_id" id="createKeyUpstream" required></select></label>
+        <label><span>平台筛选</span><select id="createKeyPlatform"><option value="">全部平台</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></label>
+        <label><span>分组</span><select name="group_id" id="createKeyGroup" required></select></label>
+        <label><span>名称</span><input name="name" required /></label>
+        <div class="form-grid"><label><span>配额</span><input name="quota" type="number" min="0" /></label><label><span>有效天数</span><input name="expires_in_days" type="number" min="1" /></label></div>
+        <p id="createKeyMessage" class="form-message"></p>
+        <div class="modal-actions"><button class="btn primary" type="submit">创建</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="createdKeyDialog" class="modal small-modal"><div class="modal-body"><div class="modal-header"><h2>Key 已创建</h2><button class="icon-btn" type="button" data-close-dialog="createdKeyDialog" aria-label="关闭"><i data-lucide="x"></i></button></div><div id="createdKeyMeta" class="muted"></div><div class="secret-box"><code id="createdKeyValue"></code><button class="icon-btn" type="button" data-action="copy-created-key" aria-label="复制"><i data-lucide="copy"></i></button></div></div></dialog>
+
+    <dialog id="ownSiteDialog" class="modal">
+      <form id="ownSiteForm" class="modal-body"><div class="modal-header"><h2 id="ownSiteDialogTitle">新增自己站</h2><button class="icon-btn" type="button" data-close-dialog="ownSiteDialog"><i data-lucide="x"></i></button></div><input name="id" type="hidden" /><div class="form-grid"><label><span>名称</span><input name="name" required /></label><label><span>地址</span><input name="base_url" type="url" required /></label><label><span>类型</span><select name="own_site_type"><option value="auto">自动识别</option><option value="sub2api">Sub2API</option><option value="new-api">New API</option></select></label><label><span>认证模式</span><select name="auth_mode"><option value="token">Token</option><option value="password">账号密码</option><option value="admin">管理员 Token</option></select></label><label><span>邮箱</span><input name="email" type="email" /></label><label><span>密码</span><input name="password" type="password" /></label><label class="span-2"><span>Token</span><input name="token" type="password" /></label><label class="span-2"><span>备注</span><textarea name="notes" rows="3"></textarea></label></div><p id="ownSiteFormMessage" class="form-message"></p><div class="modal-actions"><button id="testOwnSiteBtn" class="btn secondary" type="button">测试</button><button class="btn primary" type="submit">保存</button></div></form>
+    </dialog>
+
+    <dialog id="bindRouteDialog" class="modal small-modal"><form id="bindRouteForm" class="modal-body"><div class="modal-header"><h2>绑定上游 Key</h2><button class="icon-btn" type="button" data-close-dialog="bindRouteDialog"><i data-lucide="x"></i></button></div><input name="own_site_id" type="hidden" /><input name="route_id" type="hidden" /><label><span>上游 Key</span><select name="binding" id="routeBindingSelect" required></select></label><label><span>备注</span><input name="notes" /></label><div class="modal-actions"><button class="btn primary" type="submit">保存绑定</button></div></form></dialog>
+
+    <input id="importFileInput" type="file" accept="application/json,.json" hidden />
+    <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+    <div id="loadingOverlay" class="loading-overlay" hidden><span class="spinner"></span></div>
   </body>
 </html>

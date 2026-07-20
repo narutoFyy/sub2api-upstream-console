@@ -8,6 +8,10 @@ const { seedFromEnv } = require('./seed');
 const { syncSite, syncAllSites, syncDueSites } = require('./syncService');
 const { createPaymentOrder, fetchSub2APIState, getPaymentOrder } = require('./upstreamClient');
 const { fetchOwnSiteRoutes } = require('./ownSiteClient');
+const { importAllKeys } = require('./keyImportService');
+const { buildUpstreamMonitoring } = require('./monitoringService');
+const { checkUpstreamKeys, checkDueUpstreams } = require('./keyConnectivityService');
+const { pushPlusStatus, sendPushPlus } = require('./pushPlusClient');
 const {
   listSub2APIKeys,
   listSub2APIGroups,
@@ -19,6 +23,7 @@ const {
 const app = express();
 
 app.use(express.json({ limit: '1mb' }));
+app.use('/vendor/lucide', express.static(path.join(config.rootDir, 'node_modules/lucide/dist/umd')));
 app.use(express.static(path.join(config.rootDir, 'public')));
 
 function parseCookies(header = '') {
@@ -138,6 +143,9 @@ function sanitizeSitePayload(payload, { partial = false } = {}) {
   if ('sync_interval_seconds' in next || !partial) {
     next.sync_interval_seconds = Number(next.sync_interval_seconds ?? 180);
   }
+  if ('key_check_interval_seconds' in next || !partial) {
+    next.key_check_interval_seconds = Number(next.key_check_interval_seconds ?? 300);
+  }
   return {
     ...next
   };
@@ -155,7 +163,10 @@ const siteSchema = z.object({
   notes: z.string().optional().default(''),
   low_balance_threshold: z.number().min(0).max(100000000).optional().default(10),
   rate_change_threshold_percent: z.number().min(0).max(100000).optional().default(20),
-  sync_interval_seconds: z.number().int().min(30).max(86400).optional().default(180)
+  sync_interval_seconds: z.number().int().min(30).max(86400).optional().default(180),
+  key_check_interval_seconds: z.number().int().min(60).max(86400).optional().default(300),
+  openai_probe_model: z.string().max(200).optional().default(''),
+  anthropic_probe_model: z.string().max(200).optional().default('')
 });
 
 const siteUpdateSchema = z.object({
@@ -170,7 +181,10 @@ const siteUpdateSchema = z.object({
   notes: z.string().optional(),
   low_balance_threshold: z.number().min(0).max(100000000).optional(),
   rate_change_threshold_percent: z.number().min(0).max(100000).optional(),
-  sync_interval_seconds: z.number().int().min(30).max(86400).optional()
+  sync_interval_seconds: z.number().int().min(30).max(86400).optional(),
+  key_check_interval_seconds: z.number().int().min(60).max(86400).optional(),
+  openai_probe_model: z.string().max(200).optional(),
+  anthropic_probe_model: z.string().max(200).optional()
 });
 
 const rechargeOrderSchema = z.object({
@@ -420,6 +434,21 @@ app.delete('/api/upstreams/:id', (req, res) => {
   res.json({ deleted: repo.deleteSite(Number(req.params.id)) });
 });
 
+app.get('/api/monitoring/upstreams', (req, res) => {
+  const monitoring = buildUpstreamMonitoring(repo);
+  monitoring.pushplus = pushPlusStatus();
+  monitoring.open_alerts = repo.listAlerts({ status: 'open' }, 500).length;
+  res.json(monitoring);
+});
+
+app.get('/api/upstreams/:id/monitoring', (req, res) => {
+  const id = Number(req.params.id);
+  const monitoring = buildUpstreamMonitoring(repo);
+  const item = monitoring.items.find((site) => Number(site.id) === id);
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  return res.json({ item, import_runs: repo.listKeyImportRuns(id, 20) });
+});
+
 app.get('/api/own-sites', (req, res) => {
   res.json({ items: repo.listOwnSites() });
 });
@@ -658,6 +687,76 @@ app.get('/api/upstreams/:id/keys', async (req, res, next) => {
   }
 });
 
+app.post('/api/upstreams/:id/keys/import', async (req, res, next) => {
+  try {
+    const result = await importAllKeys(Number(req.params.id));
+    res.json({
+      ok: true,
+      run: result.run,
+      summary: result.summary,
+      message: `Key 导入完成：新增 ${result.summary.added}，更新 ${result.summary.updated}，失效 ${result.summary.missing}，分组变化 ${result.summary.group_changes}`
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/upstreams/:id/keys/check', async (req, res, next) => {
+  try {
+    res.json(await checkUpstreamKeys(Number(req.params.id), {
+      concurrency: config.keyCheckConcurrency,
+      timeoutMs: config.keyCheckTimeoutMs
+    }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/upstreams/:id/keys/:keyId/check', async (req, res, next) => {
+  try {
+    res.json(await checkUpstreamKeys(Number(req.params.id), {
+      keyId: req.params.keyId,
+      concurrency: 1,
+      timeoutMs: config.keyCheckTimeoutMs
+    }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/upstreams/:id/key-checks', (req, res) => {
+  const id = Number(req.params.id);
+  if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
+  res.json({
+    items: repo.listKeyConnectivityChecks(id, req.query.key_id || null, Number(req.query.limit || 100))
+  });
+});
+
+app.get('/api/alerts', (req, res) => {
+  res.json({
+    items: repo.listAlerts({
+      status: String(req.query.status || ''),
+      siteId: req.query.upstream_site_id ? Number(req.query.upstream_site_id) : null
+    }, Number(req.query.limit || 200))
+  });
+});
+
+app.get('/api/notifications/pushplus/status', (req, res) => {
+  res.json(pushPlusStatus());
+});
+
+app.post('/api/notifications/pushplus/test', async (req, res, next) => {
+  try {
+    const result = await sendPushPlus({
+      title: 'Sub2API 控制台测试',
+      content: `PushPlus 已成功连接。\n时间：${new Date().toISOString()}`
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.get('/api/upstreams/:id/key-groups', async (req, res, next) => {
   try {
     const ctx = getSiteCredentials(Number(req.params.id));
@@ -792,6 +891,17 @@ if (config.syncSchedulerEnabled) {
       console.error('Scheduled sync failed:', err);
     });
   }, Math.max(10, config.syncSchedulerTickSeconds) * 1000).unref();
+}
+
+if (config.keyCheckSchedulerEnabled) {
+  setInterval(() => {
+    checkDueUpstreams({
+      concurrency: config.keyCheckConcurrency,
+      timeoutMs: config.keyCheckTimeoutMs
+    }).catch((err) => {
+      console.error('Scheduled Key check failed:', err);
+    });
+  }, Math.max(10, config.keyCheckSchedulerTickSeconds) * 1000).unref();
 }
 
 app.use((err, req, res, next) => {

@@ -25,11 +25,22 @@ SESSION_SECRET=请替换成另一个强随机字符串
 ADMIN_PASSWORD=请设置控制台登录密码
 SYNC_SCHEDULER_ENABLED=true
 SYNC_SCHEDULER_TICK_SECONDS=30
+KEY_CHECK_SCHEDULER_ENABLED=true
+KEY_CHECK_SCHEDULER_TICK_SECONDS=30
+KEY_CHECK_CONCURRENCY=3
+KEY_CHECK_TIMEOUT_MS=15000
+PUSHPLUS_TOKEN=请填写你的 PushPlus Token
+ALERT_FAILURE_THRESHOLD=3
+ALERT_RECOVERY_THRESHOLD=2
 MAX_SYNC_LOGS=500
 MAX_RATE_SNAPSHOTS=2000
 ```
 
 生产环境必须设置 `ADMIN_PASSWORD`，否则任何能访问端口的人都能打开控制台。
+
+Key 联通检测会使用每个上游配置的 OpenAI / Anthropic 检测模型发起最小真实请求，会产生极低但非零的消耗。上线前建议先为一个上游配置低成本模型，手动执行“立即检测”，确认后再开启定时检测。
+
+`PUSHPLUS_TOKEN` 未配置时，告警仍会记录在控制台，但不会发送微信通知。配置后可在“设置 → PushPlus”发送测试通知。
 
 ## 反向代理
 

@@ -112,11 +112,13 @@ function createSite(input) {
   const insertSite = db.prepare(`
     INSERT INTO upstream_sites (
       name, base_url, upstream_type, auth_mode, status, tags, notes,
-      low_balance_threshold, rate_change_threshold_percent, sync_interval_seconds, created_at, updated_at
+      low_balance_threshold, rate_change_threshold_percent, sync_interval_seconds,
+      key_check_interval_seconds, openai_probe_model, anthropic_probe_model, created_at, updated_at
     )
     VALUES (
       @name, @base_url, @upstream_type, @auth_mode, 'active', @tags, @notes,
-      @low_balance_threshold, @rate_change_threshold_percent, @sync_interval_seconds, @now, @now
+      @low_balance_threshold, @rate_change_threshold_percent, @sync_interval_seconds,
+      @key_check_interval_seconds, @openai_probe_model, @anthropic_probe_model, @now, @now
     )
   `);
   const tx = db.transaction(() => {
@@ -130,6 +132,9 @@ function createSite(input) {
       low_balance_threshold: input.low_balance_threshold ?? 10,
       rate_change_threshold_percent: input.rate_change_threshold_percent ?? 20,
       sync_interval_seconds: input.sync_interval_seconds || 180,
+      key_check_interval_seconds: input.key_check_interval_seconds || 300,
+      openai_probe_model: input.openai_probe_model || '',
+      anthropic_probe_model: input.anthropic_probe_model || '',
       now
     });
     db.prepare(`
@@ -156,6 +161,9 @@ function updateSite(id, input) {
     low_balance_threshold: input.low_balance_threshold ?? site.low_balance_threshold ?? 10,
     rate_change_threshold_percent: input.rate_change_threshold_percent ?? site.rate_change_threshold_percent ?? 20,
     sync_interval_seconds: input.sync_interval_seconds ?? site.sync_interval_seconds,
+    key_check_interval_seconds: input.key_check_interval_seconds ?? site.key_check_interval_seconds ?? 300,
+    openai_probe_model: input.openai_probe_model ?? site.openai_probe_model ?? '',
+    anthropic_probe_model: input.anthropic_probe_model ?? site.anthropic_probe_model ?? '',
     id,
     now
   };
@@ -165,7 +173,11 @@ function updateSite(id, input) {
       SET name=@name, base_url=@base_url, upstream_type=@upstream_type, auth_mode=@auth_mode, status=@status, tags=@tags,
           notes=@notes, low_balance_threshold=@low_balance_threshold,
           rate_change_threshold_percent=@rate_change_threshold_percent,
-          sync_interval_seconds=@sync_interval_seconds, updated_at=@now
+          sync_interval_seconds=@sync_interval_seconds,
+          key_check_interval_seconds=@key_check_interval_seconds,
+          openai_probe_model=@openai_probe_model,
+          anthropic_probe_model=@anthropic_probe_model,
+          updated_at=@now
       WHERE id=@id
     `).run(next);
     const currentCreds = getCredentials(id) || {};
@@ -465,7 +477,8 @@ function saveSyncSuccess(siteId, result) {
 
     db.prepare(`
       UPDATE upstream_sites
-      SET status='active', last_sync_at=?, last_sync_error='', updated_at=?
+      SET status='active', last_sync_at=?, last_sync_error='',
+          sync_failure_count=0, sync_success_count=sync_success_count + 1, updated_at=?
       WHERE id=?
     `).run(now, now, siteId);
 
@@ -518,7 +531,10 @@ function saveSyncLog(siteId, syncType, startedAt, status, error, summary = '') {
   `).run(siteId, syncType, status, startedAt, finishedAt, duration, error?.status || null, error?.message || '', summary);
   if (status !== 'success') {
     db.prepare(`
-      UPDATE upstream_sites SET status='sync_failed', last_sync_error=?, updated_at=? WHERE id=?
+      UPDATE upstream_sites
+      SET status='sync_failed', last_sync_error=?, sync_failure_count=sync_failure_count + 1,
+          sync_success_count=0, updated_at=?
+      WHERE id=?
     `).run(error?.message || 'Sync failed', finishedAt, siteId);
   }
 }
@@ -743,35 +759,104 @@ function capabilityMatrix(siteId) {
   };
 }
 
-function saveKeySnapshots(siteId, keys, capturedAt = nowIso()) {
-  db.prepare('DELETE FROM upstream_api_key_snapshots WHERE upstream_site_id = ?').run(siteId);
-  const insert = db.prepare(`
+function keySnapshotInput(siteId, key, capturedAt) {
+  const fallbackId = key.key_masked || key.name || '';
+  return {
+    upstream_site_id: siteId,
+    upstream_key_id: String(key.id ?? key.upstream_key_id ?? fallbackId),
+    name: key.name || '',
+    key_masked: key.key_masked || '',
+    group_id: String(key.group_id ?? ''),
+    group_name: key.group_name || '',
+    platform: key.platform || '',
+    group_rate: key.group_rate ?? key.rate_multiplier ?? null,
+    status: key.status || '',
+    quota: key.quota ?? null,
+    quota_used: key.quota_used ?? null,
+    expires_at: key.expires_at || null,
+    last_used_at: key.last_used_at || null,
+    captured_at: capturedAt
+  };
+}
+
+function keySnapshotChanged(previous, next) {
+  const fields = [
+    'name', 'key_masked', 'group_id', 'group_name', 'platform', 'group_rate',
+    'status', 'quota', 'quota_used', 'expires_at', 'last_used_at'
+  ];
+  return fields.some((field) => String(previous?.[field] ?? '') !== String(next?.[field] ?? ''));
+}
+
+function reconcileKeySnapshots(siteId, keys, capturedAt = nowIso(), { markMissing = false } = {}) {
+  const existingRows = db.prepare(`
+    SELECT * FROM upstream_api_key_snapshots WHERE upstream_site_id = ?
+  `).all(siteId);
+  const existing = new Map(existingRows.map((row) => [String(row.upstream_key_id), row]));
+  const seen = new Set();
+  const summary = { total: 0, added: 0, updated: 0, unchanged: 0, missing: 0, group_changes: 0 };
+  const upsert = db.prepare(`
     INSERT INTO upstream_api_key_snapshots (
       upstream_site_id, upstream_key_id, name, key_masked, group_id, group_name, platform, group_rate,
-      status, quota, quota_used, expires_at, last_used_at, captured_at
+      status, quota, quota_used, expires_at, last_used_at, captured_at,
+      first_seen_at, last_seen_at, missing_since, import_state
     ) VALUES (
       @upstream_site_id, @upstream_key_id, @name, @key_masked, @group_id, @group_name, @platform, @group_rate,
-      @status, @quota, @quota_used, @expires_at, @last_used_at, @captured_at
+      @status, @quota, @quota_used, @expires_at, @last_used_at, @captured_at,
+      @first_seen_at, @last_seen_at, NULL, 'present'
     )
+    ON CONFLICT(upstream_site_id, upstream_key_id) DO UPDATE SET
+      name=excluded.name, key_masked=excluded.key_masked, group_id=excluded.group_id,
+      group_name=excluded.group_name, platform=excluded.platform, group_rate=excluded.group_rate,
+      status=excluded.status, quota=excluded.quota, quota_used=excluded.quota_used,
+      expires_at=excluded.expires_at, last_used_at=excluded.last_used_at,
+      captured_at=excluded.captured_at, last_seen_at=excluded.last_seen_at,
+      missing_since=NULL, import_state='present'
   `);
-  for (const key of keys) {
-    insert.run({
-      upstream_site_id: siteId,
-      upstream_key_id: String(key.id ?? ''),
-      name: key.name || '',
-      key_masked: key.key_masked || '',
-      group_id: String(key.group_id ?? ''),
-      group_name: key.group_name || '',
-      platform: key.platform || '',
-      group_rate: key.group_rate ?? key.rate_multiplier ?? null,
-      status: key.status || '',
-      quota: key.quota ?? null,
-      quota_used: key.quota_used ?? null,
-      expires_at: key.expires_at || null,
-      last_used_at: key.last_used_at || null,
-      captured_at: capturedAt
-    });
-  }
+  const markMissingStmt = db.prepare(`
+    UPDATE upstream_api_key_snapshots
+    SET import_state='missing', missing_since=COALESCE(missing_since, ?)
+    WHERE upstream_site_id=? AND upstream_key_id=?
+  `);
+
+  const tx = db.transaction(() => {
+    for (const key of keys || []) {
+      const next = keySnapshotInput(siteId, key, capturedAt);
+      if (!next.upstream_key_id || seen.has(next.upstream_key_id)) continue;
+      seen.add(next.upstream_key_id);
+      summary.total += 1;
+      const previous = existing.get(next.upstream_key_id);
+      if (!previous) summary.added += 1;
+      else if (keySnapshotChanged(previous, next) || previous.import_state === 'missing') {
+        summary.updated += 1;
+        if (String(previous.group_id || '') !== next.group_id || String(previous.group_rate ?? '') !== String(next.group_rate ?? '')) {
+          summary.group_changes += 1;
+        }
+      } else {
+        summary.unchanged += 1;
+      }
+      upsert.run({
+        ...next,
+        first_seen_at: previous?.first_seen_at || previous?.captured_at || capturedAt,
+        last_seen_at: capturedAt
+      });
+    }
+
+    if (markMissing) {
+      for (const row of existingRows) {
+        if (seen.has(String(row.upstream_key_id)) || row.import_state === 'missing') continue;
+        markMissingStmt.run(capturedAt, siteId, row.upstream_key_id);
+        summary.missing += 1;
+      }
+      db.prepare('UPDATE upstream_sites SET last_key_import_at=?, updated_at=? WHERE id=?')
+        .run(capturedAt, capturedAt, siteId);
+    }
+  });
+  tx();
+  return summary;
+}
+
+function saveKeySnapshots(siteId, keys, capturedAt = nowIso()) {
+  return reconcileKeySnapshots(siteId, keys, capturedAt, { markMissing: false });
 }
 
 function listKeySnapshots(siteId, limit = 200) {
@@ -812,6 +897,242 @@ function listAllKeySnapshots({ upstreamSiteId = null, platform = '', status = ''
     JOIN upstream_sites s ON s.id = k.upstream_site_id
     WHERE ${clauses.join(' AND ')}
     ORDER BY k.captured_at DESC, k.id DESC
+    LIMIT ?
+  `).all(...params);
+}
+
+function listKeySnapshotsWithHealth(siteId, { includeMissing = true } = {}, limit = 1000) {
+  return db.prepare(`
+    SELECT k.*, s.name AS upstream_name, s.base_url,
+           h.status AS connectivity_status, h.probe_level, h.model AS probe_model,
+           h.latency_ms, h.http_status AS connectivity_http_status,
+           h.error_code AS connectivity_error_code, h.error_message AS connectivity_error_message,
+           h.consecutive_failures, h.consecutive_successes,
+           h.last_checked_at, h.last_success_at, h.last_failure_at
+    FROM upstream_api_key_snapshots k
+    JOIN upstream_sites s ON s.id = k.upstream_site_id
+    LEFT JOIN upstream_key_connectivity_state h
+      ON h.upstream_site_id = k.upstream_site_id AND h.upstream_key_id = k.upstream_key_id
+    WHERE k.upstream_site_id = ? AND (? = 1 OR k.import_state != 'missing')
+    ORDER BY CASE WHEN COALESCE(h.status, 'untested') IN ('connected', 'untested') THEN 1 ELSE 0 END,
+             k.name COLLATE NOCASE, k.id
+    LIMIT ?
+  `).all(siteId, includeMissing ? 1 : 0, limit);
+}
+
+function startKeyImportRun(siteId, startedAt = nowIso()) {
+  const result = db.prepare(`
+    INSERT INTO upstream_key_import_runs (upstream_site_id, status, started_at)
+    VALUES (?, 'running', ?)
+  `).run(siteId, startedAt);
+  return Number(result.lastInsertRowid);
+}
+
+function finishKeyImportRun(runId, result, finishedAt = nowIso()) {
+  db.prepare(`
+    UPDATE upstream_key_import_runs
+    SET status=@status, pages=@pages, total=@total, added=@added, updated=@updated,
+        missing=@missing, group_changes=@group_changes, full_key_count=@full_key_count,
+        error_message=@error_message, finished_at=@finished_at
+    WHERE id=@id
+  `).run({
+    id: runId,
+    status: result.status || 'success',
+    pages: result.pages || 0,
+    total: result.total || 0,
+    added: result.added || 0,
+    updated: result.updated || 0,
+    missing: result.missing || 0,
+    group_changes: result.group_changes || 0,
+    full_key_count: result.full_key_count || 0,
+    error_message: result.error_message || '',
+    finished_at: finishedAt
+  });
+  return db.prepare('SELECT * FROM upstream_key_import_runs WHERE id = ?').get(runId);
+}
+
+function listKeyImportRuns(siteId, limit = 20) {
+  return db.prepare(`
+    SELECT * FROM upstream_key_import_runs
+    WHERE upstream_site_id = ?
+    ORDER BY started_at DESC, id DESC
+    LIMIT ?
+  `).all(siteId, limit);
+}
+
+const CONNECTIVITY_FAILURES = new Set(['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error']);
+
+function recordKeyConnectivityCheck(siteId, keyId, check) {
+  const checkedAt = check.checked_at || nowIso();
+  const previous = db.prepare(`
+    SELECT * FROM upstream_key_connectivity_state
+    WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).get(siteId, String(keyId)) || null;
+  const connected = check.status === 'connected';
+  const failed = CONNECTIVITY_FAILURES.has(check.status);
+  const nextFailures = failed ? Number(previous?.consecutive_failures || 0) + 1 : 0;
+  const nextSuccesses = connected ? Number(previous?.consecutive_successes || 0) + 1 : 0;
+  const values = {
+    upstream_site_id: siteId,
+    upstream_key_id: String(keyId),
+    status: check.status || 'untested',
+    probe_level: check.probe_level || 'inference',
+    platform: check.platform || '',
+    model: check.model || '',
+    latency_ms: check.latency_ms ?? null,
+    http_status: check.http_status ?? null,
+    error_code: check.error_code || '',
+    error_message: check.error_message || '',
+    consecutive_failures: nextFailures,
+    consecutive_successes: nextSuccesses,
+    last_checked_at: checkedAt,
+    last_success_at: connected ? checkedAt : previous?.last_success_at || null,
+    last_failure_at: failed ? checkedAt : previous?.last_failure_at || null,
+    updated_at: checkedAt
+  };
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO upstream_key_connectivity_checks (
+        upstream_site_id, upstream_key_id, status, probe_level, platform, model,
+        latency_ms, http_status, error_code, error_message, checked_at
+      ) VALUES (
+        @upstream_site_id, @upstream_key_id, @status, @probe_level, @platform, @model,
+        @latency_ms, @http_status, @error_code, @error_message, @last_checked_at
+      )
+    `).run(values);
+    db.prepare(`
+      INSERT INTO upstream_key_connectivity_state (
+        upstream_site_id, upstream_key_id, status, probe_level, platform, model,
+        latency_ms, http_status, error_code, error_message,
+        consecutive_failures, consecutive_successes, last_checked_at,
+        last_success_at, last_failure_at, updated_at
+      ) VALUES (
+        @upstream_site_id, @upstream_key_id, @status, @probe_level, @platform, @model,
+        @latency_ms, @http_status, @error_code, @error_message,
+        @consecutive_failures, @consecutive_successes, @last_checked_at,
+        @last_success_at, @last_failure_at, @updated_at
+      )
+      ON CONFLICT(upstream_site_id, upstream_key_id) DO UPDATE SET
+        status=excluded.status, probe_level=excluded.probe_level, platform=excluded.platform,
+        model=excluded.model, latency_ms=excluded.latency_ms, http_status=excluded.http_status,
+        error_code=excluded.error_code, error_message=excluded.error_message,
+        consecutive_failures=excluded.consecutive_failures,
+        consecutive_successes=excluded.consecutive_successes,
+        last_checked_at=excluded.last_checked_at, last_success_at=excluded.last_success_at,
+        last_failure_at=excluded.last_failure_at, updated_at=excluded.updated_at
+    `).run(values);
+    db.prepare('UPDATE upstream_sites SET last_key_check_at=?, updated_at=? WHERE id=?')
+      .run(checkedAt, checkedAt, siteId);
+  });
+  tx();
+  return {
+    previous,
+    current: db.prepare(`
+      SELECT * FROM upstream_key_connectivity_state
+      WHERE upstream_site_id = ? AND upstream_key_id = ?
+    `).get(siteId, String(keyId))
+  };
+}
+
+function listKeyConnectivityChecks(siteId, keyId = null, limit = 100) {
+  if (keyId != null) {
+    return db.prepare(`
+      SELECT * FROM upstream_key_connectivity_checks
+      WHERE upstream_site_id = ? AND upstream_key_id = ?
+      ORDER BY checked_at DESC, id DESC LIMIT ?
+    `).all(siteId, String(keyId), limit);
+  }
+  return db.prepare(`
+    SELECT * FROM upstream_key_connectivity_checks
+    WHERE upstream_site_id = ?
+    ORDER BY checked_at DESC, id DESC LIMIT ?
+  `).all(siteId, limit);
+}
+
+function pruneKeyConnectivityChecks(siteId) {
+  db.prepare(`
+    DELETE FROM upstream_key_connectivity_checks
+    WHERE upstream_site_id = ? AND id NOT IN (
+      SELECT id FROM upstream_key_connectivity_checks
+      WHERE upstream_site_id = ?
+      ORDER BY checked_at DESC, id DESC
+      LIMIT ?
+    )
+  `).run(siteId, siteId, config.maxKeyCheckLogs);
+}
+
+function findOpenAlert(fingerprint) {
+  return db.prepare(`
+    SELECT * FROM alert_events
+    WHERE fingerprint = ? AND status = 'open'
+    ORDER BY id DESC LIMIT 1
+  `).get(fingerprint) || null;
+}
+
+function openOrTouchAlert(input) {
+  const now = input.now || nowIso();
+  const existing = findOpenAlert(input.fingerprint);
+  if (existing) {
+    db.prepare(`
+      UPDATE alert_events SET last_seen_at=?, title=?, message=?, severity=? WHERE id=?
+    `).run(now, input.title || existing.title, input.message || existing.message, input.severity || existing.severity, existing.id);
+    return db.prepare('SELECT * FROM alert_events WHERE id = ?').get(existing.id);
+  }
+  const result = db.prepare(`
+    INSERT INTO alert_events (
+      fingerprint, event_type, severity, status, upstream_site_id, upstream_key_id,
+      title, message, opened_at, last_seen_at
+    ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.fingerprint,
+    input.event_type,
+    input.severity || 'warning',
+    input.upstream_site_id ?? null,
+    input.upstream_key_id || '',
+    input.title || '',
+    input.message || '',
+    now,
+    now
+  );
+  return db.prepare('SELECT * FROM alert_events WHERE id = ?').get(result.lastInsertRowid);
+}
+
+function markAlertNotified(id, at = nowIso()) {
+  db.prepare('UPDATE alert_events SET notified_at=? WHERE id=?').run(at, id);
+  return db.prepare('SELECT * FROM alert_events WHERE id=?').get(id) || null;
+}
+
+function resolveAlert(fingerprint, at = nowIso()) {
+  const alert = findOpenAlert(fingerprint);
+  if (!alert) return null;
+  db.prepare(`UPDATE alert_events SET status='resolved', resolved_at=?, last_seen_at=? WHERE id=?`)
+    .run(at, at, alert.id);
+  return db.prepare('SELECT * FROM alert_events WHERE id=?').get(alert.id) || null;
+}
+
+function markRecoveryNotified(id, at = nowIso()) {
+  db.prepare('UPDATE alert_events SET recovery_notified_at=? WHERE id=?').run(at, id);
+  return db.prepare('SELECT * FROM alert_events WHERE id=?').get(id) || null;
+}
+
+function listAlerts({ status = '', siteId = null } = {}, limit = 200) {
+  const clauses = ['1=1'];
+  const params = [];
+  if (status) {
+    clauses.push('a.status = ?');
+    params.push(status);
+  }
+  if (siteId) {
+    clauses.push('a.upstream_site_id = ?');
+    params.push(siteId);
+  }
+  params.push(limit);
+  return db.prepare(`
+    SELECT a.*, s.name AS upstream_name
+    FROM alert_events a
+    LEFT JOIN upstream_sites s ON s.id = a.upstream_site_id
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY CASE WHEN a.status = 'open' THEN 0 ELSE 1 END, a.opened_at DESC, a.id DESC
     LIMIT ?
   `).all(...params);
 }
@@ -1147,8 +1468,22 @@ module.exports = {
   exportSites,
   pruneTelemetry,
   saveKeySnapshots,
+  reconcileKeySnapshots,
   listKeySnapshots,
   listAllKeySnapshots,
+  listKeySnapshotsWithHealth,
+  startKeyImportRun,
+  finishKeyImportRun,
+  listKeyImportRuns,
+  recordKeyConnectivityCheck,
+  listKeyConnectivityChecks,
+  pruneKeyConnectivityChecks,
+  findOpenAlert,
+  openOrTouchAlert,
+  markAlertNotified,
+  resolveAlert,
+  markRecoveryNotified,
+  listAlerts,
   saveKeyCreateLog,
   listOwnSites,
   getOwnSite,

@@ -1,6 +1,6 @@
 # Sub2API Upstream Console
 
-一个独立的 Sub2API 上游聚合控制台，用来集中查看多个上游账号的余额、用量、倍率、充值比例和同步状态。
+一个独立的 Sub2API 上游运维控制台，用来集中查看上游余额、Key 分组倍率、真实联通性、异常事件和同步状态。
 
 当前版本：`v1.7.1`
 
@@ -50,6 +50,10 @@ http://localhost:4317
 
 ### 同步和监控
 
+- 新版上游监控台按余额优先展示，上游行可直接展开全部 Key。
+- 支持单上游一键导入全部 Key，完整遍历分页并显示新增、更新、失效和分组变化数量。
+- 支持单 Key 和单上游全部 Key 真实请求检测，记录联通、超时、鉴权失败、额度不足、上游错误和耗时。
+- 导入的完整 Key 仅在检测过程的内存中使用，数据库和前端只保存掉码。
 - 手动同步单个上游或全部上游。
 - 后台按上游同步频率自动同步。
 - 展示余额、今日/近 7 天/近 30 天用量、成本、API Key 数量、渠道数量和分组倍率。
@@ -60,6 +64,7 @@ http://localhost:4317
 - 保存历史快照，展示余额和用量趋势。
 - 记录同步日志、最近成功时间、最近失败原因。
 - 支持低余额、长期未同步、同步失败和倍率变化提醒。
+- 支持 PushPlus 微信告警：连续失败达阈值时推送一次，恢复后推送一次，避免重复刷屏。
 
 ### 倍率聚合
 
@@ -106,10 +111,11 @@ http://localhost:4317
 
 ### 前端体验
 
-- 上游列表支持搜索、标签筛选、状态筛选和排序。
+- 左侧导航的运维工作台，总览、上游监控、Key、自己站、模型价格、告警和日志独立分区。
+- 上游列表支持搜索、状态筛选、余额排序和展开 Key 明细。
 - 深色/浅色主题切换。
 - 移动端布局适配。
-- 关键数字区域使用 `Times New Roman` 显示，便于阅读余额、倍率和用量。
+- 余额、倍率和联通耗时使用等宽数字排版，便于扫描比较。
 
 ## 常用环境变量
 
@@ -122,6 +128,15 @@ http://localhost:4317
 | `SESSION_SECRET` | 复用 `APP_SECRET` | 登录 Cookie 签名密钥 |
 | `SYNC_SCHEDULER_ENABLED` | `true` | 是否启用后台定时同步 |
 | `SYNC_SCHEDULER_TICK_SECONDS` | `30` | 后台同步扫描间隔 |
+| `KEY_CHECK_SCHEDULER_ENABLED` | `true` | 是否启用 Key 后台联通检测 |
+| `KEY_CHECK_SCHEDULER_TICK_SECONDS` | `30` | Key 检测任务扫描间隔 |
+| `KEY_CHECK_CONCURRENCY` | `3` | 单上游 Key 检测并发数 |
+| `KEY_CHECK_TIMEOUT_MS` | `15000` | 单次真实请求超时时间 |
+| `PUSHPLUS_TOKEN` | 空 | PushPlus Token；空时仅记录告警事件 |
+| `PUSHPLUS_BASE_URL` | `https://www.pushplus.plus/send` | PushPlus 推送接口 |
+| `ALERT_FAILURE_THRESHOLD` | `3` | 连续失败多少次后开启事故 |
+| `ALERT_RECOVERY_THRESHOLD` | `2` | 连续成功多少次后发送恢复 |
+| `MAX_KEY_CHECK_LOGS` | `10000` | 每个上游保留的 Key 检测历史数量 |
 | `MAX_SYNC_LOGS` | `500` | 每个上游保留的同步日志数量 |
 | `MAX_RATE_SNAPSHOTS` | `2000` | 每个上游保留的倍率快照数量 |
 
