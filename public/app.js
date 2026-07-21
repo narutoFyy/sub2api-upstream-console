@@ -27,6 +27,7 @@ const state = {
   keyFilters: { upstream: '', platform: '', health: '' },
   alertStatus: '',
   runtimeSettings: { settings: null, effective: null, locks: {}, source: 'defaults', warning: '' },
+  systemUpdate: { enabled: false, operation: { phase: 'idle' }, commits: [] },
   settingsTab: 'notifications',
   createdKey: '',
   usage: { items: [], total: 0, page: 1, pageSize: 20, pages: 1, loading: false, error: '', upstreamId: '', startDate: '', endDate: '' }
@@ -421,7 +422,36 @@ function renderSettings() {
   document.querySelector('[data-runtime-setting="sync_enabled"]').disabled = syncLocked;
   document.querySelector('[data-runtime-setting="key_check_enabled"]').disabled = keyLocked;
   renderUpstreamPolicies();
+  renderSystemUpdate();
   setSettingsTab(state.settingsTab);
+}
+
+function renderSystemUpdate() {
+  const update = state.systemUpdate || {};
+  const operation = update.operation || {};
+  const activePhases = new Set(['queued', 'checking', 'backup', 'code', 'testing', 'rollback', 'restarting']);
+  const phaseLabels = {
+    idle: '待检查', queued: '等待执行', checking: '检查中', backup: '备份中', code: '安装中',
+    testing: '测试中', rollback: '回退中', restarting: '重启中', completed: '已完成', failed: '失败'
+  };
+  document.querySelector('#currentVersionText').textContent = update.current_version ? `v${update.current_version}` : '-';
+  document.querySelector('#currentCommitText').textContent = update.current_commit || '-';
+  document.querySelector('#latestVersionText').textContent = update.latest_version ? `v${update.latest_version}` : '-';
+  document.querySelector('#latestCommitText').textContent = update.remote_commit || '-';
+  document.querySelector('#systemUpdateMessage').textContent = operation.message || update.message || '版本状态不可用';
+  document.querySelector('#updateStateText').textContent = phaseLabels[operation.phase] || (update.available ? '可更新' : '已是最新');
+  document.querySelector('#updateTimeText').textContent = operation.updated_at ? timeText(operation.updated_at) : '';
+  const error = document.querySelector('#updateErrorText');
+  error.hidden = !operation.error;
+  error.textContent = operation.error || '';
+  const commits = document.querySelector('#updateCommitList');
+  commits.hidden = !(update.commits || []).length;
+  commits.innerHTML = (update.commits || []).map((item) => `<div class="update-commit-item"><code>${escapeHtml(item.commit)}</code><span>${escapeHtml(item.subject)}</span></div>`).join('');
+  const applyButton = document.querySelector('#applySystemUpdateBtn');
+  applyButton.disabled = !update.enabled || !update.available || activePhases.has(operation.phase);
+  applyButton.innerHTML = activePhases.has(operation.phase)
+    ? '<i data-lucide="loader-circle"></i>更新进行中'
+    : '<i data-lucide="download"></i>安装更新';
 }
 
 function collectRuntimeSettings() {
@@ -585,7 +615,7 @@ async function openUsageDetail(usageId) {
 async function refreshAll({ quiet = false } = {}) {
   if (!quiet) setBusy(true);
   try {
-    const [monitoring, alerts, logs, rateChanges, pricing, ownSites, ownRoutes, runtimeSettings] = await Promise.all([
+    const [monitoring, alerts, logs, rateChanges, pricing, ownSites, ownRoutes, runtimeSettings, systemUpdate] = await Promise.all([
       api('/api/monitoring/upstreams'),
       api('/api/alerts'),
       api('/api/sync-logs'),
@@ -593,7 +623,8 @@ async function refreshAll({ quiet = false } = {}) {
       api('/api/model-pricing/board').catch(() => ({ openai: [], claude: [] })),
       api('/api/own-sites').catch(() => ({ items: [] })),
       api('/api/own-site-routes').catch(() => ({ items: [] })),
-      api('/api/settings/runtime')
+      api('/api/settings/runtime'),
+      api('/api/system/update').catch(() => ({ enabled: false, message: '版本状态读取失败', operation: { phase: 'failed' } }))
     ]);
     state.monitoring = monitoring;
     state.alerts = alerts.items || [];
@@ -603,6 +634,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.ownSites = ownSites.items || [];
     state.ownRoutes = ownRoutes.items || [];
     state.runtimeSettings = runtimeSettings;
+    state.systemUpdate = systemUpdate;
     renderOverview();
     renderMonitoring();
     renderGlobalKeys();
@@ -782,6 +814,29 @@ async function runAction(button, busyLabel, task) {
   button.disabled = true;
   button.textContent = busyLabel;
   try { await task(); } catch (error) { toast(error.message, 'error'); } finally { button.disabled = false; button.innerHTML = original; refreshIcons(); }
+}
+
+async function monitorSystemUpdate() {
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    try {
+      state.systemUpdate = await api('/api/system/update');
+      renderSystemUpdate();
+      refreshIcons();
+      const phase = state.systemUpdate.operation?.phase;
+      if (phase === 'completed') {
+        window.location.reload();
+        return;
+      }
+      if (phase === 'failed') {
+        toast(state.systemUpdate.operation?.message || '更新失败', 'error');
+        return;
+      }
+    } catch {
+      // A short connection failure is expected while the process supervisor restarts the service.
+    }
+  }
+  toast('等待服务重启超时，请检查服务器进程状态', 'error');
 }
 
 document.querySelector('#loginForm').addEventListener('submit', async (event) => {
@@ -1052,6 +1107,27 @@ document.addEventListener('click', async (event) => {
       await refreshAll({ quiet: true });
       toast('PushPlus 控制台配置已清空', 'success');
     });
+  }
+  if (target.dataset.action === 'check-system-update') return runAction(target, '检查中', async () => {
+    state.systemUpdate = await api('/api/system/update/check', { method: 'POST' });
+    renderSystemUpdate();
+    refreshIcons();
+    toast(state.systemUpdate.message || '版本检查完成', state.systemUpdate.available ? 'success' : '');
+  });
+  if (target.dataset.action === 'apply-system-update') {
+    const count = Number(state.systemUpdate.behind || 0);
+    if (!confirm(`确定安装${count ? `这 ${count} 个提交` : '当前更新'}？系统会先备份数据库并在完成后重启。`)) return;
+    try {
+      const result = await api('/api/system/update/apply', { method: 'POST' });
+      state.systemUpdate = { ...state.systemUpdate, ...result, operation: result.operation };
+      renderSystemUpdate();
+      refreshIcons();
+      toast('更新任务已开始');
+      monitorSystemUpdate();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+    return;
   }
   if (target.dataset.action === 'export-config') { const data = await api('/api/export'); const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `sub2api-upstreams-${Date.now()}.json`; link.click(); URL.revokeObjectURL(url); return; }
   if (target.dataset.action === 'import-config') return document.querySelector('#importFileInput').click();

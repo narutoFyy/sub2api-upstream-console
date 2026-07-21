@@ -392,6 +392,17 @@ svg { display: block; }
 .inline-toggle { padding-bottom: 1px; }
 .compact-toggle { min-height: 32px; }
 .maintenance-grid { margin-top: 0; }
+.version-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.version-grid > div { min-width: 0; display: grid; gap: 7px; padding: 16px; border-right: 1px solid var(--border); }
+.version-grid > div:last-child { border-right: 0; }
+.version-grid span { color: var(--text-muted); font-size: 12px; }
+.version-grid strong { font-size: 18px; }
+.version-grid code, .version-grid small { color: var(--text-secondary); overflow-wrap: anywhere; }
+.update-commit-list { margin-top: 14px; border-top: 1px solid var(--border); }
+.update-commit-item { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.update-commit-item code { color: var(--text-muted); }
+.update-error { margin-top: 14px; padding: 11px 12px; border-left: 3px solid var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 .settings-policy-table { min-width: 1180px; }
 .settings-policy-table input[type="number"] { width: 116px; min-height: 34px; }
 .policy-control { display: flex; align-items: center; gap: 8px; }
@@ -517,6 +528,10 @@ dialog::backdrop { background: rgba(13, 18, 24, 0.44); backdrop-filter: blur(2px
   .settings-tabs { width: 100%; overflow-x: auto; }
   .settings-tabs button { flex: 1 0 auto; }
   .settings-form-grid, .settings-form-grid.compact-grid, .toggle-grid { grid-template-columns: 1fr; }
+  .version-grid { grid-template-columns: 1fr; }
+  .version-grid > div { border-right: 0; border-bottom: 1px solid var(--border); }
+  .version-grid > div:last-child { border-bottom: 0; }
+  .update-actions .btn { width: 100%; }
   .section-heading { align-items: flex-start; flex-direction: column; }
   .probe-model-row { grid-template-columns: 1fr; align-items: stretch; }
   .usage-filter-grid { grid-template-columns: 1fr 1fr; }

@@ -1,0 +1,20 @@
+[Unit]
+Description=Sub2API Upstream Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sub2api
+Group=sub2api
+WorkingDirectory=/opt/sub2api-upstream-console
+EnvironmentFile=/etc/sub2api-upstream-console.env
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

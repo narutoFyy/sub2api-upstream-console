@@ -2,7 +2,7 @@
 
 一个独立的 Sub2API 上游运维控制台，用来集中查看上游余额、Key 分组倍率、真实联通性、异常事件和同步状态。
 
-当前版本：`v1.7.1`
+当前版本：`v1.8.0`
 
 ## 项目定位
 
@@ -25,6 +25,45 @@ npm start
 ```text
 http://localhost:4317
 ```
+
+## 生产部署与在线更新
+
+推荐使用 Node.js 22、Git 和 systemd 部署。源码、环境配置、运行数据分别存放，后续更新不会覆盖密钥或 SQLite：
+
+```text
+/opt/sub2api-upstream-console/       Git 源码
+/etc/sub2api-upstream-console.env    生产环境变量
+/var/lib/sub2api-upstream-console/   SQLite 数据
+/var/backups/sub2api-upstream-console/ 更新前备份
+```
+
+生产环境至少配置：
+
+```env
+PORT=6060
+DATABASE_PATH=/var/lib/sub2api-upstream-console/upstream-console.sqlite
+APP_SECRET=固定的强随机字符串
+SESSION_SECRET=另一个固定的强随机字符串
+ADMIN_PASSWORD=控制台登录密码
+SELF_UPDATE_ENABLED=true
+SELF_UPDATE_REMOTE=origin
+SELF_UPDATE_BRANCH=main
+UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
+```
+
+`APP_SECRET` 用于加密上游凭证和完整 Key，投入使用后不能随版本更新而更换。`.env` 和数据库必须放在 Git 工作区之外，并限制文件权限。
+
+仓库提供 [systemd 服务示例](deploy/sub2api-upstream-console.service)。服务用户需要对源码目录、`.git`、`node_modules`、数据目录和备份目录拥有写权限，systemd 必须设置 `Restart=always`。
+
+首次部署并启动成功后，可以在“设置 → 系统 → 系统版本”中检查和安装更新。在线更新仅允许从配置好的 `origin/main` 快进：
+
+1. 检查服务器工作区，存在未提交修改或分支分叉时拒绝更新。
+2. 使用 SQLite 在线备份 API 创建更新前备份。
+3. 更新源码并执行 `npm ci --omit=dev`。
+4. 运行完整 `npm test`；失败时自动恢复原提交和依赖。
+5. 测试通过后退出，由 systemd 拉起新版，前端等待恢复后自动刷新。
+
+在线更新不能替代服务器备份。建议定期把数据库备份复制到另一台主机或对象存储。没有域名和 HTTPS 时，不要把控制台长期暴露给所有公网来源；至少应设置强 `ADMIN_PASSWORD` 并在云防火墙限制访问 IP。
 
 更多说明：
 
@@ -153,12 +192,23 @@ http://localhost:4317
 | `MAX_KEY_CHECK_LOGS` | `10000` | 每个上游保留的 Key 检测历史数量 |
 | `MAX_SYNC_LOGS` | `500` | 每个上游保留的同步日志数量 |
 | `MAX_RATE_SNAPSHOTS` | `2000` | 每个上游保留的倍率快照数量 |
+| `SELF_UPDATE_ENABLED` | `false` | 是否启用设置页在线更新；仅应在 systemd/PM2 自动重启环境开启 |
+| `SELF_UPDATE_REMOTE` | `origin` | 在线更新使用的固定 Git 远端 |
+| `SELF_UPDATE_BRANCH` | `main` | 在线更新使用的固定 Git 分支 |
+| `UPDATE_BACKUP_DIR` | 数据库同级 `backups` | 在线更新和手动下载数据库时使用的临时/持久备份目录 |
 
 `SYNC_SCHEDULER_ENABLED=false` 和 `KEY_CHECK_SCHEDULER_ENABLED=false` 是启动级紧急硬锁，设置页不能绕过。其余调度间隔、并发、超时、告警阈值和保留数量作为首次运行/未保存控制台设置时的环境默认值；一旦在设置页保存，数据库中的运行设置优先并在下一次调度扫描时生效。保存设置本身不会立即触发同步或真实 Key 探测。
 
 Key 自动探测会向真实模型端点发送最小请求，允许产生极低但非零的消费。检测模型候选不会自动更新，只在上游编辑页手动点击“同步模型”时刷新并保存到本地；下次手动同步前继续使用当前缓存。
 
 ## 更新说明
+
+### v1.8.0 - 2026-07-21
+
+- 设置页新增系统版本展示、远端更新检查和一键安装更新。
+- 在线更新会先备份 SQLite，随后快进代码、安装锁定依赖并运行完整测试；失败时自动恢复原提交。
+- 更新成功后退出当前进程，由 systemd 或 PM2 自动拉起新版并让前端自动刷新。
+- 数据库下载改用 SQLite 在线备份 API，避免 WAL 模式下遗漏尚未 checkpoint 的数据。
 
 ### v1.7.1 - 2026-06-13
 

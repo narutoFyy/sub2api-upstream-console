@@ -1,5 +1,6 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const express = require('express');
 const { z } = require('zod');
 const config = require('./config');
@@ -17,6 +18,8 @@ const { updateManagedKey, deleteManagedKey } = require('./keyMutationService');
 const { queryUpstreamUsage, getUpstreamUsageDetail } = require('./upstreamUsage');
 const { runtimeSettingsStatus, updateRuntimeSettings } = require('./runtimeSettings');
 const { startRuntimeScheduler, schedulerAllowed } = require('./runtimeScheduler');
+const { createUpdateService } = require('./updateService');
+const database = require('./db');
 const {
   listSub2APIKeys,
   listSub2APIGroups,
@@ -24,6 +27,24 @@ const {
 } = require('./upstreamKeys');
 
 const app = express();
+let httpServer;
+let shuttingDown = false;
+
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const forceExit = setTimeout(() => process.exit(0), 5000);
+  forceExit.unref();
+  if (!httpServer) return process.exit(0);
+  httpServer.close(() => {
+    try { database.close(); } catch {}
+    process.exit(0);
+  });
+}
+
+const updateService = createUpdateService({
+  restart: () => setTimeout(shutdown, 800)
+});
 
 app.use(express.json({ limit: '1mb' }));
 app.use('/vendor/lucide', express.static(path.join(config.rootDir, 'node_modules/lucide/dist/umd')));
@@ -388,8 +409,18 @@ app.post('/api/import', (req, res, next) => {
   }
 });
 
-app.get('/api/backup/database', (req, res) => {
-  res.download(config.databasePath, `sub2api-upstream-console-${Date.now()}.sqlite`);
+app.get('/api/backup/database', async (req, res, next) => {
+  const backupPath = path.join(config.updateBackupDir, `manual-backup-${Date.now()}.sqlite`);
+  try {
+    fs.mkdirSync(config.updateBackupDir, { recursive: true });
+    await database.backup(backupPath);
+    res.download(backupPath, `sub2api-upstream-console-${Date.now()}.sqlite`, () => {
+      fs.rm(backupPath, { force: true }, () => {});
+    });
+  } catch (err) {
+    fs.rm(backupPath, { force: true }, () => {});
+    next(err);
+  }
 });
 
 app.get('/api/upstreams', (req, res) => {
@@ -819,6 +850,30 @@ app.put('/api/settings/runtime', (req, res, next) => {
   }
 });
 
+app.get('/api/system/update', async (req, res, next) => {
+  try {
+    res.json(await updateService.inspect());
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/system/update/check', async (req, res, next) => {
+  try {
+    res.json(await updateService.check());
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/system/update/apply', async (req, res, next) => {
+  try {
+    res.status(202).json(await updateService.start());
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.put('/api/notifications/pushplus/settings', (req, res, next) => {
   try {
     const payload = pushPlusSettingSchema.parse(req.body || {});
@@ -1031,6 +1086,9 @@ app.use((err, req, res, next) => {
 
 seedFromEnv();
 
-app.listen(config.port, () => {
+httpServer = app.listen(config.port, () => {
   console.log(`Sub2API Upstream Console running at http://localhost:${config.port}`);
 });
+
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);

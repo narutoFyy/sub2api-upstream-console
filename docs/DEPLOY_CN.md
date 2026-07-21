@@ -34,6 +34,10 @@ ALERT_FAILURE_THRESHOLD=3
 ALERT_RECOVERY_THRESHOLD=2
 MAX_SYNC_LOGS=500
 MAX_RATE_SNAPSHOTS=2000
+SELF_UPDATE_ENABLED=true
+SELF_UPDATE_REMOTE=origin
+SELF_UPDATE_BRANCH=main
+UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 ```
 
 生产环境必须设置 `ADMIN_PASSWORD`，否则任何能访问端口的人都能打开控制台。
@@ -66,11 +70,27 @@ http://127.0.0.1:4317
 
 建议同时启用 HTTPS，并限制访问来源。
 
-## 升级流程
+## 控制台在线更新
+
+设置 `SELF_UPDATE_ENABLED=true` 后，“设置 → 系统 → 系统版本”会显示当前提交和远端版本，并允许管理员检查、安装更新。
+
+在线更新要求：
+
+1. 项目必须通过 Git clone 部署，服务用户对源码目录、`.git` 和 `node_modules` 有写权限。
+2. 工作区必须没有未提交修改，更新方式固定为配置的远端和分支，并且只允许快进更新。
+3. 服务器需要能执行 `git`、`npm`，并访问 Git 远端和 npm registry。
+4. 必须由 systemd、PM2 等进程管理器托管并开启自动重启。仓库提供了 `deploy/sub2api-upstream-console.service` 示例，其中 `Restart=always` 是在线更新后自动恢复服务的关键。
+5. 数据库和备份目录应放在 Git 工作区之外，并保证服务用户可写。`APP_SECRET`、`.env` 不会被在线更新修改。
+
+点击“安装更新”后会依次执行：SQLite 在线备份、`git fetch`、快进合并、`npm ci --omit=dev`、`npm test`。测试失败会自动回退原提交；成功后当前进程退出，由进程管理器拉起新版。前端会等待服务恢复并自动刷新。
+
+建议仍保留下面的手动流程，供在线更新不可用或分支发生分叉时使用。
+
+## 手动升级流程
 
 ```powershell
-git pull
-npm install
+git pull --ff-only
+npm ci --omit=dev
 npm test
 npm start
 ```

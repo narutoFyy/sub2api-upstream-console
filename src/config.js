@@ -32,6 +32,13 @@ module.exports = {
   maxKeyCheckLogs: Number(process.env.MAX_KEY_CHECK_LOGS || 10000),
   maxSyncLogs: Number(process.env.MAX_SYNC_LOGS || 500),
   maxRateSnapshots: Number(process.env.MAX_RATE_SNAPSHOTS || 2000),
+  selfUpdateEnabled: process.env.SELF_UPDATE_ENABLED === 'true',
+  selfUpdateRemote: process.env.SELF_UPDATE_REMOTE || 'origin',
+  selfUpdateBranch: process.env.SELF_UPDATE_BRANCH || 'main',
+  updateBackupDir: resolveProjectPath(
+    process.env.UPDATE_BACKUP_DIR,
+    path.join(path.dirname(resolveProjectPath(process.env.DATABASE_PATH, './data/upstream-console.sqlite')), 'backups')
+  ),
   seed: {
     name: process.env.SEED_UPSTREAM_NAME || 'Stone API',
     baseUrl: process.env.SEED_UPSTREAM_BASE_URL || 'https://www.shitoutk.com',
