@@ -3,7 +3,28 @@ const { encryptSecret, decryptSecret, maskSecret } = require('./crypto');
 const config = require('./config');
 const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
 const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard, isSub2APIPricingSite, resolveOfficialPricingRows, summarizePlatformRates } = require('./modelPricing');
-const { normalizeSub2APIKey } = require('./upstreamKeys');
+const { normalizeSub2APIKey, isCompleteApiKey } = require('./upstreamKeys');
+
+function sanitizeConnectivityError(value) {
+  return String(value || '')
+    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[IP]')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[KEY]')
+    .slice(0, 500);
+}
+
+function sanitizeConnectivityRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    ...(Object.hasOwn(row, 'error_message')
+      ? { error_message: sanitizeConnectivityError(row.error_message) }
+      : {}),
+    ...(Object.hasOwn(row, 'connectivity_error_message')
+      ? { connectivity_error_message: sanitizeConnectivityError(row.connectivity_error_message) }
+      : {})
+  };
+}
 
 function rowToSite(row) {
   if (!row) return null;
@@ -112,13 +133,15 @@ function createSite(input) {
   const insertSite = db.prepare(`
     INSERT INTO upstream_sites (
       name, base_url, upstream_type, auth_mode, status, tags, notes,
-      low_balance_threshold, rate_change_threshold_percent, sync_interval_seconds,
-      key_check_interval_seconds, openai_probe_model, anthropic_probe_model, created_at, updated_at
+      low_balance_threshold, rate_change_threshold_percent, sync_enabled, sync_interval_seconds,
+      key_check_enabled, key_check_interval_seconds, alert_notifications_enabled,
+      low_balance_alert_enabled, openai_probe_model, anthropic_probe_model, created_at, updated_at
     )
     VALUES (
       @name, @base_url, @upstream_type, @auth_mode, 'active', @tags, @notes,
-      @low_balance_threshold, @rate_change_threshold_percent, @sync_interval_seconds,
-      @key_check_interval_seconds, @openai_probe_model, @anthropic_probe_model, @now, @now
+      @low_balance_threshold, @rate_change_threshold_percent, @sync_enabled, @sync_interval_seconds,
+      @key_check_enabled, @key_check_interval_seconds, @alert_notifications_enabled,
+      @low_balance_alert_enabled, @openai_probe_model, @anthropic_probe_model, @now, @now
     )
   `);
   const tx = db.transaction(() => {
@@ -131,8 +154,12 @@ function createSite(input) {
       notes: input.notes || '',
       low_balance_threshold: input.low_balance_threshold ?? 10,
       rate_change_threshold_percent: input.rate_change_threshold_percent ?? 20,
+      sync_enabled: input.sync_enabled === false ? 0 : 1,
       sync_interval_seconds: input.sync_interval_seconds || 180,
+      key_check_enabled: input.key_check_enabled === false ? 0 : 1,
       key_check_interval_seconds: input.key_check_interval_seconds || 300,
+      alert_notifications_enabled: input.alert_notifications_enabled === false ? 0 : 1,
+      low_balance_alert_enabled: input.low_balance_alert_enabled === false ? 0 : 1,
       openai_probe_model: input.openai_probe_model || '',
       anthropic_probe_model: input.anthropic_probe_model || '',
       now
@@ -160,8 +187,16 @@ function updateSite(id, input) {
     notes: input.notes ?? site.notes,
     low_balance_threshold: input.low_balance_threshold ?? site.low_balance_threshold ?? 10,
     rate_change_threshold_percent: input.rate_change_threshold_percent ?? site.rate_change_threshold_percent ?? 20,
+    sync_enabled: input.sync_enabled == null ? Number(site.sync_enabled ?? 1) : (input.sync_enabled ? 1 : 0),
     sync_interval_seconds: input.sync_interval_seconds ?? site.sync_interval_seconds,
+    key_check_enabled: input.key_check_enabled == null ? Number(site.key_check_enabled ?? 1) : (input.key_check_enabled ? 1 : 0),
     key_check_interval_seconds: input.key_check_interval_seconds ?? site.key_check_interval_seconds ?? 300,
+    alert_notifications_enabled: input.alert_notifications_enabled == null
+      ? Number(site.alert_notifications_enabled ?? 1)
+      : (input.alert_notifications_enabled ? 1 : 0),
+    low_balance_alert_enabled: input.low_balance_alert_enabled == null
+      ? Number(site.low_balance_alert_enabled ?? 1)
+      : (input.low_balance_alert_enabled ? 1 : 0),
     openai_probe_model: input.openai_probe_model ?? site.openai_probe_model ?? '',
     anthropic_probe_model: input.anthropic_probe_model ?? site.anthropic_probe_model ?? '',
     id,
@@ -173,8 +208,12 @@ function updateSite(id, input) {
       SET name=@name, base_url=@base_url, upstream_type=@upstream_type, auth_mode=@auth_mode, status=@status, tags=@tags,
           notes=@notes, low_balance_threshold=@low_balance_threshold,
           rate_change_threshold_percent=@rate_change_threshold_percent,
+          sync_enabled=@sync_enabled,
           sync_interval_seconds=@sync_interval_seconds,
+          key_check_enabled=@key_check_enabled,
           key_check_interval_seconds=@key_check_interval_seconds,
+          alert_notifications_enabled=@alert_notifications_enabled,
+          low_balance_alert_enabled=@low_balance_alert_enabled,
           openai_probe_model=@openai_probe_model,
           anthropic_probe_model=@anthropic_probe_model,
           updated_at=@now
@@ -306,31 +345,44 @@ function replaceUpstreamProbeModels(siteId, groups, syncedAt = nowIso()) {
 
     for (const group of normalizedGroups) {
       const groupId = String(group.group_id ?? '');
+      const seen = new Set();
+      const candidates = [];
+      for (const item of group.models || []) {
+        const model = String(typeof item === 'string' ? item : item?.model || '').trim();
+        if (!model || seen.has(model)) continue;
+        seen.add(model);
+        candidates.push({
+          model,
+          source: typeof item === 'string' ? (group.source || '') : (item.source || group.source || '')
+        });
+      }
+      const existingModelCount = db.prepare(`
+        SELECT COUNT(*) AS count FROM upstream_probe_model_catalog
+        WHERE upstream_site_id = ? AND group_id = ?
+      `).get(siteId, groupId).count;
+      const retainedStale = candidates.length === 0 && existingModelCount > 0;
       upsertGroup.run({
         upstream_site_id: siteId,
         group_id: groupId,
         group_name: group.group_name || '',
         platform: group.platform || '',
-        discovery_status: group.discovery_status || 'success',
+        discovery_status: retainedStale ? 'stale' : (group.discovery_status || 'success'),
         discovery_error: group.discovery_error || '',
         synced_at: syncedAt,
         updated_at: syncedAt
       });
+      if (!candidates.length) continue;
       db.prepare(`
-        DELETE FROM upstream_probe_model_catalog
-        WHERE upstream_site_id = ? AND group_id = ?
-      `).run(siteId, groupId);
-      const seen = new Set();
-      for (const item of group.models || []) {
-        const model = String(typeof item === 'string' ? item : item?.model || '').trim();
-        if (!model || seen.has(model)) continue;
-        seen.add(model);
+          DELETE FROM upstream_probe_model_catalog
+          WHERE upstream_site_id = ? AND group_id = ?
+        `).run(siteId, groupId);
+      for (const item of candidates) {
         insertModel.run(
           siteId,
           groupId,
-          model,
+          item.model,
           group.platform || '',
-          typeof item === 'string' ? (group.source || '') : (item.source || group.source || ''),
+          item.source,
           syncedAt
         );
       }
@@ -391,6 +443,45 @@ function getGroupProbeModel(siteId, groupId) {
     SELECT selected_model FROM upstream_group_probe_settings
     WHERE upstream_site_id = ? AND group_id = ?
   `).get(siteId, String(groupId ?? ''))?.selected_model || '';
+}
+
+function setKeyProbeModel(siteId, keyId, selectedModel) {
+  const normalizedKeyId = String(keyId ?? '');
+  const key = db.prepare(`
+    SELECT 1 FROM upstream_api_key_snapshots
+    WHERE upstream_site_id = ? AND upstream_key_id = ? AND import_state != 'missing'
+  `).get(siteId, normalizedKeyId);
+  if (!key) {
+    const error = new Error('Key not found');
+    error.status = 404;
+    throw error;
+  }
+  const model = String(selectedModel || '').trim();
+  if (!model) {
+    db.prepare(`
+      DELETE FROM upstream_key_probe_settings WHERE upstream_site_id = ? AND upstream_key_id = ?
+    `).run(siteId, normalizedKeyId);
+    return { upstream_site_id: siteId, upstream_key_id: normalizedKeyId, selected_model: '', updated_at: nowIso() };
+  }
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO upstream_key_probe_settings (
+      upstream_site_id, upstream_key_id, selected_model, updated_at
+    ) VALUES (?, ?, ?, ?)
+    ON CONFLICT(upstream_site_id, upstream_key_id) DO UPDATE SET
+      selected_model=excluded.selected_model, updated_at=excluded.updated_at
+  `).run(siteId, normalizedKeyId, model, now);
+  return db.prepare(`
+    SELECT * FROM upstream_key_probe_settings
+    WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).get(siteId, normalizedKeyId);
+}
+
+function getKeyProbeModel(siteId, keyId) {
+  return db.prepare(`
+    SELECT selected_model FROM upstream_key_probe_settings
+    WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).get(siteId, String(keyId ?? ''))?.selected_model || '';
 }
 
 function getMaskedOwnSiteCredentials(id) {
@@ -487,7 +578,7 @@ function latestRatesByGroup(siteId) {
   return map;
 }
 
-function saveSyncSuccess(siteId, result) {
+function saveSyncSuccess(siteId, result, limits = {}) {
   const now = nowIso();
   const snapshot = result.snapshot;
   const site = getSite(siteId) || {};
@@ -639,12 +730,14 @@ function saveSyncSuccess(siteId, result) {
       WHERE id=?
     `).run(now, now, siteId);
 
-    pruneTelemetry(siteId);
+    pruneTelemetry(siteId, limits);
   });
   tx();
 }
 
-function pruneTelemetry(siteId) {
+function pruneTelemetry(siteId, limits = {}) {
+  const maxSyncLogs = Number(limits.maxSyncLogs || config.maxSyncLogs);
+  const maxRateSnapshots = Number(limits.maxRateSnapshots || config.maxRateSnapshots);
   db.prepare(`
     DELETE FROM sync_logs
     WHERE upstream_site_id = ?
@@ -654,7 +747,7 @@ function pruneTelemetry(siteId) {
         ORDER BY started_at DESC, id DESC
         LIMIT ?
       )
-  `).run(siteId, siteId, config.maxSyncLogs);
+  `).run(siteId, siteId, maxSyncLogs);
 
   db.prepare(`
     DELETE FROM group_rate_snapshots
@@ -665,7 +758,7 @@ function pruneTelemetry(siteId) {
         ORDER BY captured_at DESC, id DESC
         LIMIT ?
       )
-  `).run(siteId, siteId, config.maxRateSnapshots);
+  `).run(siteId, siteId, maxRateSnapshots);
 
   db.prepare(`
     DELETE FROM model_pricing_snapshots
@@ -676,7 +769,7 @@ function pruneTelemetry(siteId) {
         ORDER BY captured_at DESC, id DESC
         LIMIT ?
       )
-  `).run(siteId, siteId, Math.max(config.maxRateSnapshots, 5000));
+  `).run(siteId, siteId, Math.max(maxRateSnapshots, 5000));
 }
 
 function saveSyncLog(siteId, syncType, startedAt, status, error, summary = '') {
@@ -1016,6 +1109,97 @@ function saveKeySnapshots(siteId, keys, capturedAt = nowIso()) {
   return reconcileKeySnapshots(siteId, keys, capturedAt, { markMissing: false });
 }
 
+function reconcileKeySecrets(siteId, keys, { removeMissing = false, at = nowIso() } = {}) {
+  const existingRows = db.prepare(`
+    SELECT upstream_key_id, encrypted_key FROM upstream_api_key_secrets WHERE upstream_site_id = ?
+  `).all(siteId);
+  const existing = new Map(existingRows.map((row) => [String(row.upstream_key_id), row]));
+  const present = new Set();
+  let stored = 0;
+  let retained = 0;
+  let removed = 0;
+  const upsert = db.prepare(`
+    INSERT INTO upstream_api_key_secrets (
+      upstream_site_id, upstream_key_id, encrypted_key, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(upstream_site_id, upstream_key_id) DO UPDATE SET
+      encrypted_key=excluded.encrypted_key, updated_at=excluded.updated_at
+  `);
+  const remove = db.prepare(`
+    DELETE FROM upstream_api_key_secrets WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `);
+  const removeProbeSetting = db.prepare(`
+    DELETE FROM upstream_key_probe_settings WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `);
+
+  const tx = db.transaction(() => {
+    for (const key of keys || []) {
+      const keyId = String(key.id ?? key.upstream_key_id ?? '');
+      if (!keyId || present.has(keyId)) continue;
+      present.add(keyId);
+      if (isCompleteApiKey(key.key_full)) {
+        upsert.run(siteId, keyId, encryptSecret(key.key_full), at, at);
+        stored += 1;
+      } else if (existing.has(keyId)) {
+        retained += 1;
+      }
+    }
+    if (removeMissing) {
+      for (const keyId of existing.keys()) {
+        if (present.has(keyId)) continue;
+        removed += remove.run(siteId, keyId).changes;
+        removeProbeSetting.run(siteId, keyId);
+      }
+    }
+  });
+  tx();
+
+  return {
+    stored,
+    retained,
+    removed,
+    full_key_count: db.prepare(`
+      SELECT COUNT(*) AS count FROM upstream_api_key_secrets WHERE upstream_site_id = ?
+    `).get(siteId).count
+  };
+}
+
+function reconcileImportedKeys(siteId, keys, capturedAt = nowIso(), { markMissing = true } = {}) {
+  const tx = db.transaction(() => {
+    const summary = reconcileKeySnapshots(siteId, keys, capturedAt, { markMissing });
+    const secrets = reconcileKeySecrets(siteId, keys, { removeMissing: markMissing, at: capturedAt });
+    return { summary, secrets };
+  });
+  return tx();
+}
+
+function getKeySecret(siteId, keyId) {
+  const row = db.prepare(`
+    SELECT encrypted_key FROM upstream_api_key_secrets
+    WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).get(siteId, String(keyId));
+  return row ? decryptSecret(row.encrypted_key) : '';
+}
+
+function attachKeySecrets(siteId, keys) {
+  const rows = db.prepare(`
+    SELECT upstream_key_id, encrypted_key FROM upstream_api_key_secrets WHERE upstream_site_id = ?
+  `).all(siteId);
+  const secrets = new Map(rows.map((row) => [String(row.upstream_key_id), decryptSecret(row.encrypted_key)]));
+  return (keys || []).map((key) => ({
+    ...key,
+    key_full: isCompleteApiKey(key.key_full)
+      ? key.key_full
+      : (secrets.get(String(key.id ?? key.upstream_key_id ?? '')) || null)
+  }));
+}
+
+function deleteKeySecret(siteId, keyId) {
+  return db.prepare(`
+    DELETE FROM upstream_api_key_secrets WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).run(siteId, String(keyId)).changes > 0;
+}
+
 function listKeySnapshots(siteId, limit = 200) {
   return db.prepare(`
     SELECT k.*, s.name AS upstream_name, s.base_url
@@ -1061,7 +1245,10 @@ function listAllKeySnapshots({ upstreamSiteId = null, platform = '', status = ''
 function listKeySnapshotsWithHealth(siteId, { includeMissing = true } = {}, limit = 1000) {
   return db.prepare(`
     SELECT k.*, s.name AS upstream_name, s.base_url,
+           kp.selected_model AS selected_probe_model,
+           gp.selected_model AS group_probe_model,
            h.status AS connectivity_status, h.probe_level, h.model AS probe_model,
+           h.endpoint AS probe_endpoint,
            h.latency_ms, h.http_status AS connectivity_http_status,
            h.error_code AS connectivity_error_code, h.error_message AS connectivity_error_message,
            h.consecutive_failures, h.consecutive_successes,
@@ -1070,11 +1257,15 @@ function listKeySnapshotsWithHealth(siteId, { includeMissing = true } = {}, limi
     JOIN upstream_sites s ON s.id = k.upstream_site_id
     LEFT JOIN upstream_key_connectivity_state h
       ON h.upstream_site_id = k.upstream_site_id AND h.upstream_key_id = k.upstream_key_id
+    LEFT JOIN upstream_key_probe_settings kp
+      ON kp.upstream_site_id = k.upstream_site_id AND kp.upstream_key_id = k.upstream_key_id
+    LEFT JOIN upstream_group_probe_settings gp
+      ON gp.upstream_site_id = k.upstream_site_id AND gp.group_id = k.group_id
     WHERE k.upstream_site_id = ? AND (? = 1 OR k.import_state != 'missing')
     ORDER BY CASE WHEN COALESCE(h.status, 'untested') IN ('connected', 'untested') THEN 1 ELSE 0 END,
              k.name COLLATE NOCASE, k.id
     LIMIT ?
-  `).all(siteId, includeMissing ? 1 : 0, limit);
+  `).all(siteId, includeMissing ? 1 : 0, limit).map(sanitizeConnectivityRow);
 }
 
 function startKeyImportRun(siteId, startedAt = nowIso()) {
@@ -1121,10 +1312,10 @@ const CONNECTIVITY_FAILURES = new Set(['timeout', 'auth_failed', 'quota_exhauste
 
 function recordKeyConnectivityCheck(siteId, keyId, check) {
   const checkedAt = check.checked_at || nowIso();
-  const previous = db.prepare(`
+  const previous = sanitizeConnectivityRow(db.prepare(`
     SELECT * FROM upstream_key_connectivity_state
     WHERE upstream_site_id = ? AND upstream_key_id = ?
-  `).get(siteId, String(keyId)) || null;
+  `).get(siteId, String(keyId)) || null);
   const connected = check.status === 'connected';
   const failed = CONNECTIVITY_FAILURES.has(check.status);
   const nextFailures = failed ? Number(previous?.consecutive_failures || 0) + 1 : 0;
@@ -1136,10 +1327,11 @@ function recordKeyConnectivityCheck(siteId, keyId, check) {
     probe_level: check.probe_level || 'inference',
     platform: check.platform || '',
     model: check.model || '',
+    endpoint: check.endpoint || '',
     latency_ms: check.latency_ms ?? null,
     http_status: check.http_status ?? null,
     error_code: check.error_code || '',
-    error_message: check.error_message || '',
+    error_message: sanitizeConnectivityError(check.error_message),
     consecutive_failures: nextFailures,
     consecutive_successes: nextSuccesses,
     last_checked_at: checkedAt,
@@ -1150,28 +1342,28 @@ function recordKeyConnectivityCheck(siteId, keyId, check) {
   const tx = db.transaction(() => {
     db.prepare(`
       INSERT INTO upstream_key_connectivity_checks (
-        upstream_site_id, upstream_key_id, status, probe_level, platform, model,
+        upstream_site_id, upstream_key_id, status, probe_level, platform, model, endpoint,
         latency_ms, http_status, error_code, error_message, checked_at
       ) VALUES (
-        @upstream_site_id, @upstream_key_id, @status, @probe_level, @platform, @model,
+        @upstream_site_id, @upstream_key_id, @status, @probe_level, @platform, @model, @endpoint,
         @latency_ms, @http_status, @error_code, @error_message, @last_checked_at
       )
     `).run(values);
     db.prepare(`
       INSERT INTO upstream_key_connectivity_state (
-        upstream_site_id, upstream_key_id, status, probe_level, platform, model,
+        upstream_site_id, upstream_key_id, status, probe_level, platform, model, endpoint,
         latency_ms, http_status, error_code, error_message,
         consecutive_failures, consecutive_successes, last_checked_at,
         last_success_at, last_failure_at, updated_at
       ) VALUES (
-        @upstream_site_id, @upstream_key_id, @status, @probe_level, @platform, @model,
+        @upstream_site_id, @upstream_key_id, @status, @probe_level, @platform, @model, @endpoint,
         @latency_ms, @http_status, @error_code, @error_message,
         @consecutive_failures, @consecutive_successes, @last_checked_at,
         @last_success_at, @last_failure_at, @updated_at
       )
       ON CONFLICT(upstream_site_id, upstream_key_id) DO UPDATE SET
         status=excluded.status, probe_level=excluded.probe_level, platform=excluded.platform,
-        model=excluded.model, latency_ms=excluded.latency_ms, http_status=excluded.http_status,
+        model=excluded.model, endpoint=excluded.endpoint, latency_ms=excluded.latency_ms, http_status=excluded.http_status,
         error_code=excluded.error_code, error_message=excluded.error_message,
         consecutive_failures=excluded.consecutive_failures,
         consecutive_successes=excluded.consecutive_successes,
@@ -1184,10 +1376,10 @@ function recordKeyConnectivityCheck(siteId, keyId, check) {
   tx();
   return {
     previous,
-    current: db.prepare(`
+    current: sanitizeConnectivityRow(db.prepare(`
       SELECT * FROM upstream_key_connectivity_state
       WHERE upstream_site_id = ? AND upstream_key_id = ?
-    `).get(siteId, String(keyId))
+    `).get(siteId, String(keyId)))
   };
 }
 
@@ -1197,16 +1389,16 @@ function listKeyConnectivityChecks(siteId, keyId = null, limit = 100) {
       SELECT * FROM upstream_key_connectivity_checks
       WHERE upstream_site_id = ? AND upstream_key_id = ?
       ORDER BY checked_at DESC, id DESC LIMIT ?
-    `).all(siteId, String(keyId), limit);
+    `).all(siteId, String(keyId), limit).map(sanitizeConnectivityRow);
   }
   return db.prepare(`
     SELECT * FROM upstream_key_connectivity_checks
     WHERE upstream_site_id = ?
     ORDER BY checked_at DESC, id DESC LIMIT ?
-  `).all(siteId, limit);
+  `).all(siteId, limit).map(sanitizeConnectivityRow);
 }
 
-function pruneKeyConnectivityChecks(siteId) {
+function pruneKeyConnectivityChecks(siteId, limit = config.maxKeyCheckLogs) {
   db.prepare(`
     DELETE FROM upstream_key_connectivity_checks
     WHERE upstream_site_id = ? AND id NOT IN (
@@ -1215,13 +1407,21 @@ function pruneKeyConnectivityChecks(siteId) {
       ORDER BY checked_at DESC, id DESC
       LIMIT ?
     )
-  `).run(siteId, siteId, config.maxKeyCheckLogs);
+  `).run(siteId, siteId, Number(limit || config.maxKeyCheckLogs));
 }
 
 function findOpenAlert(fingerprint) {
   return db.prepare(`
     SELECT * FROM alert_events
     WHERE fingerprint = ? AND status = 'open'
+    ORDER BY id DESC LIMIT 1
+  `).get(fingerprint) || null;
+}
+
+function findLatestAlert(fingerprint) {
+  return db.prepare(`
+    SELECT * FROM alert_events
+    WHERE fingerprint = ?
     ORDER BY id DESC LIMIT 1
   `).get(fingerprint) || null;
 }
@@ -1255,7 +1455,12 @@ function openOrTouchAlert(input) {
 }
 
 function markAlertNotified(id, at = nowIso()) {
-  db.prepare('UPDATE alert_events SET notified_at=? WHERE id=?').run(at, id);
+  db.prepare(`
+    UPDATE alert_events
+    SET notified_at=COALESCE(notified_at, ?), last_notified_at=?,
+        notification_count=notification_count + 1
+    WHERE id=?
+  `).run(at, at, id);
   return db.prepare('SELECT * FROM alert_events WHERE id=?').get(id) || null;
 }
 
@@ -1270,6 +1475,31 @@ function resolveAlert(fingerprint, at = nowIso()) {
 function markRecoveryNotified(id, at = nowIso()) {
   db.prepare('UPDATE alert_events SET recovery_notified_at=? WHERE id=?').run(at, id);
   return db.prepare('SELECT * FROM alert_events WHERE id=?').get(id) || null;
+}
+
+function acknowledgeAlert(id, at = nowIso()) {
+  db.prepare(`
+    UPDATE alert_events SET acknowledged_at=COALESCE(acknowledged_at, ?)
+    WHERE id=? AND status='open'
+  `).run(at, Number(id));
+  return db.prepare('SELECT * FROM alert_events WHERE id=?').get(Number(id)) || null;
+}
+
+function acknowledgeAlerts(ids = [], at = nowIso()) {
+  const normalizedIds = [...new Set((ids || []).map(Number).filter(Number.isInteger))];
+  if (normalizedIds.length) {
+    const placeholders = normalizedIds.map(() => '?').join(', ');
+    const result = db.prepare(`
+      UPDATE alert_events SET acknowledged_at=COALESCE(acknowledged_at, ?)
+      WHERE status='open' AND id IN (${placeholders})
+    `).run(at, ...normalizedIds);
+    return { acknowledged: result.changes, scope: 'ids' };
+  }
+  const result = db.prepare(`
+    UPDATE alert_events SET acknowledged_at=COALESCE(acknowledged_at, ?)
+    WHERE status='open'
+  `).run(at);
+  return { acknowledged: result.changes, scope: 'all_open' };
 }
 
 function listAlerts({ status = '', siteId = null } = {}, limit = 200) {
@@ -1289,7 +1519,11 @@ function listAlerts({ status = '', siteId = null } = {}, limit = 200) {
     FROM alert_events a
     LEFT JOIN upstream_sites s ON s.id = a.upstream_site_id
     WHERE ${clauses.join(' AND ')}
-    ORDER BY CASE WHEN a.status = 'open' THEN 0 ELSE 1 END, a.opened_at DESC, a.id DESC
+    ORDER BY CASE
+      WHEN a.status = 'open' AND a.acknowledged_at IS NULL THEN 0
+      WHEN a.status = 'open' THEN 1
+      ELSE 2
+    END, a.opened_at DESC, a.id DESC
     LIMIT ?
   `).all(...params);
 }
@@ -1513,6 +1747,7 @@ function saveKeyCreateLog(siteId, key) {
     encryptSecret(key.key_full || ''),
     now
   );
+  reconcileKeySecrets(siteId, [key], { at: now });
   return db.prepare('SELECT * FROM upstream_key_create_logs WHERE id = ?').get(result.lastInsertRowid);
 }
 
@@ -1609,6 +1844,8 @@ module.exports = {
   listUpstreamProbeModels,
   setGroupProbeModel,
   getGroupProbeModel,
+  setKeyProbeModel,
+  getKeyProbeModel,
   createSite,
   updateSite,
   deleteSite,
@@ -1634,6 +1871,11 @@ module.exports = {
   pruneTelemetry,
   saveKeySnapshots,
   reconcileKeySnapshots,
+  reconcileKeySecrets,
+  reconcileImportedKeys,
+  getKeySecret,
+  attachKeySecrets,
+  deleteKeySecret,
   listKeySnapshots,
   listAllKeySnapshots,
   listKeySnapshotsWithHealth,
@@ -1644,10 +1886,13 @@ module.exports = {
   listKeyConnectivityChecks,
   pruneKeyConnectivityChecks,
   findOpenAlert,
+  findLatestAlert,
   openOrTouchAlert,
   markAlertNotified,
   resolveAlert,
   markRecoveryNotified,
+  acknowledgeAlert,
+  acknowledgeAlerts,
   listAlerts,
   saveKeyCreateLog,
   listOwnSites,

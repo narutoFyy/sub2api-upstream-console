@@ -30,6 +30,10 @@ test('model sync uses live models and falls back to recent group usage', async (
   const repository = {
     getSite: () => ({ id: 4, base_url: 'https://fixture.example', openai_probe_model: '', anthropic_probe_model: '' }),
     getCredentials: () => ({ token: 'account-token' }),
+    attachKeySecrets: (siteId, keys) => keys.map((key) => ({
+      ...key,
+      key_full: key.id === 10 ? 'sk-live' : 'sk-blocked'
+    })),
     replaceUpstreamProbeModels: (siteId, groups, syncedAt) => {
       saved = { siteId, groups, syncedAt };
       return groups.map((group) => ({ ...group, selected_model: '' }));
@@ -48,8 +52,8 @@ test('model sync uses live models and falls back to recent group usage', async (
       { id: 2, name: 'Claude', platform: 'anthropic' }
     ],
     fetchKeys: async () => ({ items: [
-      { id: 10, group_id: 1, platform: 'openai', status: 'active', key_full: 'sk-live' },
-      { id: 11, group_id: 2, platform: 'anthropic', status: 'active', key_full: 'sk-blocked' }
+      { id: 10, group_id: 1, platform: 'openai', status: 'active', key_full: null },
+      { id: 11, group_id: 2, platform: 'anthropic', status: 'active', key_full: null }
     ] }),
     getAuth: async () => ({ token: 'account-token', prefix: '/api/v1' }),
     request

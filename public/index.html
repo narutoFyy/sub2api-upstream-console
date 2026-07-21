@@ -69,7 +69,7 @@
               <span>PushPlus 未配置</span>
             </button>
             <button id="refreshBtn" class="icon-btn bordered" type="button" aria-label="刷新" title="刷新"><i data-lucide="refresh-cw"></i></button>
-            <button id="syncAllBtn" class="btn primary" type="button"><i data-lucide="refresh-cw"></i><span>同步全部</span></button>
+            <button id="syncAllBtn" class="btn primary" type="button" aria-label="同步全部" title="同步全部"><i data-lucide="refresh-cw"></i><span>同步全部</span></button>
           </div>
         </header>
 
@@ -168,8 +168,8 @@
           </section>
 
           <section class="view" data-view="alerts" hidden>
-            <div class="page-heading"><div><h2>告警事件</h2></div><select id="alertStatusFilter"><option value="">全部事件</option><option value="open">处理中</option><option value="resolved">已恢复</option></select></div>
-            <section class="table-section"><div class="table-scroll"><table class="data-table"><thead><tr><th>状态</th><th>事件</th><th>上游</th><th>Key</th><th>严重程度</th><th>发生时间</th><th>通知</th></tr></thead><tbody id="alertRows"></tbody></table></div></section>
+            <div class="page-heading"><div><h2>告警事件</h2></div><div class="filter-actions"><select id="alertStatusFilter"><option value="">全部事件</option><option value="pending">待处理</option><option value="acknowledged">已处理</option><option value="resolved">已恢复</option></select><button id="acknowledgeVisibleAlertsBtn" class="btn secondary" type="button"><i data-lucide="check-check"></i>全部标记已处理</button></div></div>
+            <section class="table-section"><div class="table-scroll"><table class="data-table"><thead><tr><th>状态</th><th>事件</th><th>上游</th><th>Key</th><th>严重程度</th><th>发生时间</th><th>通知</th><th class="align-right">操作</th></tr></thead><tbody id="alertRows"></tbody></table></div></section>
           </section>
 
           <section class="view" data-view="logs" hidden>
@@ -181,23 +181,58 @@
           </section>
 
           <section class="view" data-view="settings" hidden>
-            <div class="page-heading"><div><h2>设置</h2></div></div>
-            <div class="settings-grid">
+            <div class="page-heading"><div><h2>设置</h2><p id="runtimeSettingsStatus" class="muted"></p></div><button id="runtimeSettingsSaveBtn" class="btn primary" type="button"><i data-lucide="save"></i>保存运行设置</button></div>
+            <div class="segment-control settings-tabs" role="tablist" aria-label="设置分类">
+              <button class="active" type="button" data-settings-tab="notifications"><i data-lucide="bell-ring"></i>通知规则</button>
+              <button type="button" data-settings-tab="automation"><i data-lucide="timer"></i>自动任务</button>
+              <button type="button" data-settings-tab="upstreams"><i data-lucide="sliders-horizontal"></i>上游策略</button>
+              <button type="button" data-settings-tab="system"><i data-lucide="database"></i>系统保留</button>
+            </div>
+
+            <div class="settings-panel" data-settings-panel="notifications">
               <section class="surface setting-section setting-form-section">
                 <div><h3>PushPlus</h3><p id="pushPlusSettingStatus" class="muted">未配置</p></div>
                 <form id="pushPlusForm" class="setting-inline-form">
                   <label><span class="sr-only">PushPlus Token</span><input id="pushPlusTokenInput" name="token" type="password" autocomplete="off" placeholder="输入 PushPlus Token" /></label>
-                  <div class="button-group">
-                    <button class="btn primary" type="submit"><i data-lucide="save"></i>保存</button>
-                    <button class="btn secondary" type="button" data-action="pushplus-test"><i data-lucide="send"></i>测试</button>
-                    <button class="btn danger-outline" type="button" data-action="pushplus-clear"><i data-lucide="trash-2"></i>清空</button>
-                  </div>
+                  <div class="button-group"><button class="btn primary" type="submit"><i data-lucide="save"></i>保存</button><button class="btn secondary" type="button" data-action="pushplus-test"><i data-lucide="send"></i>测试</button><button class="btn danger-outline" type="button" data-action="pushplus-clear"><i data-lucide="trash-2"></i>清空</button></div>
                 </form>
               </section>
-              <section class="surface setting-section"><div><h3>外观</h3><p class="muted">当前主题</p></div><button id="themeToggleBtn" class="btn secondary" type="button"><i data-lucide="moon"></i>切换主题</button></section>
-              <section class="surface setting-section"><div><h3>配置文件</h3><p class="muted">导入或导出上游配置</p></div><div class="button-group"><button class="btn secondary" type="button" data-action="export-config"><i data-lucide="download"></i>导出</button><button class="btn secondary" type="button" data-action="import-config"><i data-lucide="upload"></i>导入</button></div></section>
-              <section class="surface setting-section"><div><h3>数据库</h3><p class="muted">下载 SQLite 备份</p></div><button class="btn secondary" type="button" data-action="backup-database"><i data-lucide="database-backup"></i>备份</button></section>
-              <section class="surface setting-section"><div><h3>会话</h3><p class="muted">退出当前控制台</p></div><button class="btn danger-outline" type="button" data-action="logout"><i data-lucide="log-out"></i>退出</button></section>
+              <section class="surface runtime-setting-section">
+                <div class="section-heading"><div><h3>发送规则</h3><p class="muted">事件始终记录，开关只影响微信通知</p></div></div>
+                <div class="toggle-grid">
+                  <label class="toggle-field"><input type="checkbox" data-runtime-setting="notifications_enabled" /><span class="toggle-control"></span><span>通知总开关</span></label>
+                  <label class="toggle-field"><input type="checkbox" data-runtime-setting="notify_key_connectivity" /><span class="toggle-control"></span><span>Key 联通异常</span></label>
+                  <label class="toggle-field"><input type="checkbox" data-runtime-setting="notify_low_balance" /><span class="toggle-control"></span><span>低余额</span></label>
+                  <label class="toggle-field"><input type="checkbox" data-runtime-setting="notify_sync_failure" /><span class="toggle-control"></span><span>同步失败</span></label>
+                  <label class="toggle-field"><input type="checkbox" data-runtime-setting="notify_recovery" /><span class="toggle-control"></span><span>恢复通知</span></label>
+                  <label class="toggle-field"><input type="checkbox" data-runtime-setting="notify_ip_blocked" /><span class="toggle-control"></span><span>出口 IP 被拒绝</span></label>
+                </div>
+                <div class="settings-form-grid">
+                  <label class="setting-field"><span>发送方式</span><select data-runtime-setting="notification_grouping"><option value="upstream">按上游合并</option><option value="key">逐 Key 发送</option></select></label>
+                  <label class="setting-field"><span>连续失败次数</span><input type="number" min="1" max="100" data-runtime-setting="alert_failure_threshold" /></label>
+                  <label class="setting-field"><span>连续恢复次数</span><input type="number" min="1" max="100" data-runtime-setting="alert_recovery_threshold" /></label>
+                  <label class="setting-field"><span>重复提醒间隔（秒，0 为关闭）</span><input type="number" min="0" max="604800" data-runtime-setting="alert_repeat_interval_seconds" /></label>
+                  <label class="setting-field"><span>PushPlus 超时（毫秒）</span><input type="number" min="1000" max="120000" data-runtime-setting="pushplus_timeout_ms" /></label>
+                </div>
+              </section>
+              <section class="surface runtime-setting-section">
+                <div class="section-heading"><div><h3>免打扰</h3><p class="muted">按服务器本地时间计算</p></div><label class="toggle-field"><input type="checkbox" data-runtime-setting="quiet_hours_enabled" /><span class="toggle-control"></span><span>启用</span></label></div>
+                <div class="settings-form-grid compact-grid"><label class="setting-field"><span>开始</span><input type="time" data-runtime-setting="quiet_hours_start" /></label><label class="setting-field"><span>结束</span><input type="time" data-runtime-setting="quiet_hours_end" /></label><label class="toggle-field inline-toggle"><input type="checkbox" data-runtime-setting="quiet_hours_critical_bypass" /><span class="toggle-control"></span><span>严重告警仍发送</span></label></div>
+              </section>
+            </div>
+
+            <div class="settings-panel" data-settings-panel="automation" hidden>
+              <section class="surface runtime-setting-section"><div class="section-heading"><div><h3>Key 自动探测</h3><p id="keySchedulerLockText" class="muted"></p></div><label class="toggle-field"><input type="checkbox" data-runtime-setting="key_check_enabled" /><span class="toggle-control"></span><span>启用</span></label></div><div class="settings-form-grid"><label class="setting-field"><span>调度扫描（秒）</span><input type="number" min="10" max="3600" data-runtime-setting="key_scheduler_scan_seconds" /></label><label class="setting-field"><span>新上游默认探测周期（秒）</span><input type="number" min="60" max="86400" data-runtime-setting="key_check_default_interval_seconds" /></label><label class="setting-field"><span>并发数</span><input type="number" min="1" max="20" data-runtime-setting="key_check_concurrency" /></label><label class="setting-field"><span>单次超时（毫秒）</span><input type="number" min="1000" max="120000" data-runtime-setting="key_check_timeout_ms" /></label></div></section>
+              <section class="surface runtime-setting-section"><div class="section-heading"><div><h3>上游自动同步</h3><p id="syncSchedulerLockText" class="muted"></p></div><label class="toggle-field"><input type="checkbox" data-runtime-setting="sync_enabled" /><span class="toggle-control"></span><span>启用</span></label></div><div class="settings-form-grid"><label class="setting-field"><span>调度扫描（秒）</span><input type="number" min="10" max="3600" data-runtime-setting="sync_scheduler_scan_seconds" /></label><label class="setting-field"><span>新上游默认同步周期（秒）</span><input type="number" min="30" max="86400" data-runtime-setting="sync_default_interval_seconds" /></label><label class="setting-field"><span>新上游默认余额阈值</span><input type="number" min="0" step="0.0001" data-runtime-setting="upstream_default_low_balance_threshold" /></label><label class="setting-field"><span>新上游默认倍率变化阈值 %</span><input type="number" min="0" data-runtime-setting="upstream_default_rate_change_threshold_percent" /></label></div></section>
+            </div>
+
+            <div class="settings-panel" data-settings-panel="upstreams" hidden>
+              <section class="table-section"><div class="table-section-title"><h2>上游策略覆盖</h2><span class="muted">保存只更新当前行</span></div><div class="table-scroll"><table class="data-table settings-policy-table"><thead><tr><th>上游</th><th>自动同步</th><th>Key 探测</th><th>微信通知</th><th>余额预警</th><th>倍率阈值</th><th class="align-right">操作</th></tr></thead><tbody id="runtimeUpstreamRows"></tbody></table></div></section>
+            </div>
+
+            <div class="settings-panel" data-settings-panel="system" hidden>
+              <section class="surface runtime-setting-section"><div class="section-heading"><div><h3>数据保留</h3><p class="muted">超出限额后按时间清理最旧记录</p></div></div><div class="settings-form-grid"><label class="setting-field"><span>Key 检测历史</span><input type="number" min="100" max="1000000" data-runtime-setting="max_key_check_logs" /></label><label class="setting-field"><span>同步日志</span><input type="number" min="100" max="1000000" data-runtime-setting="max_sync_logs" /></label><label class="setting-field"><span>倍率快照</span><input type="number" min="100" max="1000000" data-runtime-setting="max_rate_snapshots" /></label></div></section>
+              <div class="settings-grid maintenance-grid"><section class="surface setting-section"><div><h3>外观</h3><p class="muted">当前主题</p></div><button id="themeToggleBtn" class="btn secondary" type="button"><i data-lucide="moon"></i>切换主题</button></section><section class="surface setting-section"><div><h3>配置文件</h3><p class="muted">导入或导出上游配置</p></div><div class="button-group"><button class="btn secondary" type="button" data-action="export-config"><i data-lucide="download"></i>导出</button><button class="btn secondary" type="button" data-action="import-config"><i data-lucide="upload"></i>导入</button></div></section><section class="surface setting-section"><div><h3>数据库</h3><p class="muted">下载 SQLite 备份</p></div><button class="btn secondary" type="button" data-action="backup-database"><i data-lucide="database-backup"></i>备份</button></section><section class="surface setting-section"><div><h3>会话</h3><p class="muted">退出当前控制台</p></div><button class="btn danger-outline" type="button" data-action="logout"><i data-lucide="log-out"></i>退出</button></section></div>
             </div>
           </section>
         </div>

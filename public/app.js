@@ -26,6 +26,8 @@ const state = {
   search: '',
   keyFilters: { upstream: '', platform: '', health: '' },
   alertStatus: '',
+  runtimeSettings: { settings: null, effective: null, locks: {}, source: 'defaults', warning: '' },
+  settingsTab: 'notifications',
   createdKey: '',
   usage: { items: [], total: 0, page: 1, pageSize: 20, pages: 1, loading: false, error: '', upstreamId: '', startDate: '', endDate: '' }
 };
@@ -178,12 +180,25 @@ function connectivityMeta(key) {
     timeout: { label: '超时', tone: 'danger', dot: 'danger' },
     auth_failed: { label: '鉴权失败', tone: 'danger', dot: 'danger' },
     quota_exhausted: { label: '额度不足', tone: 'danger', dot: 'danger' },
-    upstream_error: { label: key.connectivity_error_code === 'rate_limited' ? '上游限流' : '上游错误', tone: 'danger', dot: 'danger' },
+    upstream_error: { label: key.connectivity_error_code === 'rate_limited' ? '上游限流' : key.connectivity_error_code === 'ip_blocked' ? '出口 IP 被拒绝' : '上游错误', tone: 'danger', dot: 'danger' },
     unavailable: { label: key.connectivity_error_code === 'full_key_missing' ? '无完整 Key' : '无法检测', tone: 'warning', dot: 'warning' },
     unconfigured: { label: '未配置模型', tone: 'warning', dot: 'warning' },
     untested: { label: '未检测', tone: 'warning', dot: 'warning' }
   };
   return map[status] || map.untested;
+}
+
+function keyProbeModelSelect(site, key) {
+  const selected = String(key.selected_probe_model || '');
+  const options = [...new Set((key.probe_model_options || []).map(String).filter(Boolean))];
+  if (selected && !options.includes(selected)) options.unshift(selected);
+  const inherited = key.group_probe_model || (
+    String(key.platform || '').toLowerCase().includes('anthropic')
+      ? site.anthropic_probe_model
+      : site.openai_probe_model
+  ) || '';
+  const followLabel = inherited ? `跟随分组 · ${inherited}` : '跟随分组';
+  return `<select class="key-model-select" data-key-probe-model="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" data-previous-model="${escapeHtml(selected)}" aria-label="${escapeHtml(key.name || key.key_masked || 'Key')} 检测模型" title="当前生效：${escapeHtml(key.effective_probe_model || '未配置')}"><option value="">${escapeHtml(followLabel)}</option>${options.map((model) => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(model)}${model === selected && !(key.probe_model_options || []).includes(model) ? ' · 已不在最新候选' : ''}</option>`).join('')}</select>`;
 }
 
 function filteredMonitoringSites() {
@@ -241,7 +256,7 @@ function renderExpandedKeys(site) {
     return `<tr class="${failed ? 'failure-row' : ''}">
       <td class="key-name">${escapeHtml(key.name || '未命名 Key')}</td>
       <td><span class="key-code"><code>${escapeHtml(key.key_masked || '-')}</code><button class="icon-btn copy-mini" type="button" data-copy-text="${escapeHtml(key.key_masked || '')}" title="复制"><i data-lucide="copy"></i></button></span></td>
-      <td>${escapeHtml(key.group_name || '-')}</td><td>${escapeHtml(platformLabel(key.platform))}</td><td class="numeric">${rateText(key.group_rate)}</td>
+      <td>${escapeHtml(key.group_name || '-')}</td><td>${escapeHtml(platformLabel(key.platform))}</td><td class="numeric">${rateText(key.group_rate)}</td><td>${keyProbeModelSelect(site, key)}</td>
       <td><span class="status-label ${connectivity.tone}-text"><span class="status-dot ${connectivity.dot}"></span>${escapeHtml(connectivity.label)}</span></td>
       <td>${timeText(key.last_checked_at)}</td>
       <td class="align-right"><button class="icon-btn" type="button" data-check-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="立即检测"><i data-lucide="activity"></i></button></td>
@@ -249,7 +264,7 @@ function renderExpandedKeys(site) {
   }).join('');
   return `<tr class="expanded-row"><td colspan="7"><div class="expanded-panel">
     <div class="expanded-header"><strong>${escapeHtml(site.name)} · Key 明细</strong><div class="expanded-actions"><button class="btn secondary" type="button" data-import-keys="${site.id}"><i data-lucide="download"></i>导入全部 Key</button><button class="btn primary" type="button" data-check-site-keys="${site.id}"><i data-lucide="activity"></i>立即检测</button></div></div>
-    <div class="key-inner-wrap"><table class="data-table key-inner-table"><thead><tr><th>Key 名称</th><th>Key</th><th>所属分组</th><th>平台</th><th>倍率</th><th>联通性</th><th>最近检测</th><th class="align-right">操作</th></tr></thead><tbody>${body || '<tr><td colspan="8"><div class="empty-state">还没有导入 Key</div></td></tr>'}</tbody></table></div>
+    <div class="key-inner-wrap"><table class="data-table key-inner-table"><thead><tr><th>Key 名称</th><th>Key</th><th>所属分组</th><th>平台</th><th>倍率</th><th>检测模型</th><th>联通性</th><th>最近检测</th><th class="align-right">操作</th></tr></thead><tbody>${body || '<tr><td colspan="9"><div class="empty-state">还没有导入 Key</div></td></tr>'}</tbody></table></div>
   </div></td></tr>`;
 }
 
@@ -304,9 +319,9 @@ function renderManagedKeyRows(site, keys) {
   const body = keys.map((key) => {
     const failed = ['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error'].includes(key.connectivity_status);
     const connectivity = connectivityMeta(key);
-    return `<tr class="${failed ? 'failure-row' : ''}"><td>${escapeHtml(key.name || '-')}</td><td><code>${escapeHtml(key.key_masked || '-')}</code></td><td>${escapeHtml(key.group_name || '-')}</td><td>${escapeHtml(platformLabel(key.platform))}</td><td class="numeric">${rateText(key.group_rate)}</td><td><span class="status-label ${connectivity.tone}-text"><span class="status-dot ${connectivity.dot}"></span>${escapeHtml(connectivity.label)}</span></td><td>${timeText(key.last_checked_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-check-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="检测"><i data-lucide="activity"></i></button><button class="icon-btn" type="button" data-toggle-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" data-next-status="${key.status === 'active' ? 'inactive' : 'active'}" title="${key.status === 'active' ? '暂停' : '启用'}"><i data-lucide="${key.status === 'active' ? 'pause' : 'play'}"></i></button><button class="icon-btn danger-text" type="button" data-delete-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="删除"><i data-lucide="trash-2"></i></button></div></td></tr>`;
+    return `<tr class="${failed ? 'failure-row' : ''}"><td>${escapeHtml(key.name || '-')}</td><td><code>${escapeHtml(key.key_masked || '-')}</code></td><td>${escapeHtml(key.group_name || '-')}</td><td>${escapeHtml(platformLabel(key.platform))}</td><td class="numeric">${rateText(key.group_rate)}</td><td>${keyProbeModelSelect(site, key)}</td><td><span class="status-label ${connectivity.tone}-text"><span class="status-dot ${connectivity.dot}"></span>${escapeHtml(connectivity.label)}</span></td><td>${timeText(key.last_checked_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-check-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="检测"><i data-lucide="activity"></i></button><button class="icon-btn" type="button" data-toggle-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" data-next-status="${key.status === 'active' ? 'inactive' : 'active'}" title="${key.status === 'active' ? '暂停' : '启用'}"><i data-lucide="${key.status === 'active' ? 'pause' : 'play'}"></i></button><button class="icon-btn danger-text" type="button" data-delete-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="删除"><i data-lucide="trash-2"></i></button></div></td></tr>`;
   }).join('');
-  return `<tr class="expanded-row"><td colspan="7"><div class="expanded-panel"><div class="expanded-header"><strong>${escapeHtml(site.name)} · Key 明细</strong><span class="muted">${keys.length} 个</span></div><div class="key-inner-wrap"><table class="data-table key-inner-table"><thead><tr><th>Key 名称</th><th>Key</th><th>所属分组</th><th>平台</th><th>倍率</th><th>联通性</th><th>最近检测</th><th class="align-right">操作</th></tr></thead><tbody>${body || '<tr><td colspan="8"><div class="empty-state">没有匹配的 Key</div></td></tr>'}</tbody></table></div></div></td></tr>`;
+  return `<tr class="expanded-row"><td colspan="7"><div class="expanded-panel"><div class="expanded-header"><strong>${escapeHtml(site.name)} · Key 明细</strong><span class="muted">${keys.length} 个</span></div><div class="key-inner-wrap"><table class="data-table key-inner-table"><thead><tr><th>Key 名称</th><th>Key</th><th>所属分组</th><th>平台</th><th>倍率</th><th>检测模型</th><th>联通性</th><th>最近检测</th><th class="align-right">操作</th></tr></thead><tbody>${body || '<tr><td colspan="9"><div class="empty-state">没有匹配的 Key</div></td></tr>'}</tbody></table></div></div></td></tr>`;
 }
 
 function renderOverview() {
@@ -340,10 +355,87 @@ function renderPricing() {
   }).join('') || '<div class="empty-state">暂无模型价格</div>'}</section>`).join('');
 }
 
-function renderAlerts() {
+function alertStage(item) {
+  if (item.status === 'resolved') return 'resolved';
+  if (item.acknowledged_at) return 'acknowledged';
+  return 'pending';
+}
+
+function filteredAlerts() {
   const keyword = state.search.toLowerCase();
+  return state.alerts.filter((item) => {
+    const stage = alertStage(item);
+    return (!state.alertStatus || stage === state.alertStatus)
+      && (!keyword || `${item.title} ${item.message} ${item.upstream_name}`.toLowerCase().includes(keyword));
+  });
+}
+
+function renderAlerts() {
   document.querySelector('#alertStatusFilter').value = state.alertStatus;
-  document.querySelector('#alertRows').innerHTML = state.alerts.filter((item) => (!state.alertStatus || item.status === state.alertStatus) && (!keyword || `${item.title} ${item.message} ${item.upstream_name}`.toLowerCase().includes(keyword))).map((item) => `<tr class="data-row"><td><span class="status-pill ${item.status === 'open' ? 'danger' : 'healthy'}">${item.status === 'open' ? '处理中' : '已恢复'}</span></td><td><div class="cell-stack"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.message).replaceAll('\n', ' · ')}</small></div></td><td>${escapeHtml(item.upstream_name || '-')}</td><td><code>${escapeHtml(item.upstream_key_id || '-')}</code></td><td>${item.severity === 'critical' ? '严重' : '警告'}</td><td>${timeText(item.opened_at)}</td><td>${item.notified_at ? `已推送 · ${timeText(item.notified_at)}` : '待推送'}</td></tr>`).join('') || '<tr><td colspan="7"><div class="empty-state">没有匹配的告警</div></td></tr>';
+  const visible = filteredAlerts();
+  const pending = visible.filter((item) => alertStage(item) === 'pending');
+  const bulk = document.querySelector('#acknowledgeVisibleAlertsBtn');
+  bulk.disabled = !pending.length;
+  bulk.innerHTML = `<i data-lucide="check-check"></i>${pending.length ? `全部标记已处理 (${pending.length})` : '全部标记已处理'}`;
+  document.querySelector('#alertRows').innerHTML = visible.map((item) => {
+    const stage = alertStage(item);
+    const meta = {
+      pending: { label: '待处理', tone: 'danger' },
+      acknowledged: { label: '已处理', tone: 'warning' },
+      resolved: { label: '已恢复', tone: 'healthy' }
+    }[stage];
+    const notified = item.notified_at
+      ? `已推送${Number(item.notification_count || 0) > 1 ? ` ${item.notification_count} 次` : ''} · ${timeText(item.last_notified_at || item.notified_at)}`
+      : '未推送';
+    return `<tr class="data-row"><td><span class="status-pill ${meta.tone}">${meta.label}</span></td><td><div class="cell-stack"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.message).replaceAll('\n', ' · ')}</small></div></td><td>${escapeHtml(item.upstream_name || '-')}</td><td><code>${escapeHtml(item.upstream_key_id || '-')}</code></td><td>${item.severity === 'critical' ? '严重' : '警告'}</td><td>${timeText(item.opened_at)}</td><td>${notified}</td><td class="align-right">${stage === 'pending' ? `<button class="btn secondary" type="button" data-ack-alert="${item.id}"><i data-lucide="check"></i>标记已处理</button>` : '-'}</td></tr>`;
+  }).join('') || '<tr><td colspan="8"><div class="empty-state">没有匹配的告警</div></td></tr>';
+}
+
+function renderUpstreamPolicies() {
+  const rows = document.querySelector('#runtimeUpstreamRows');
+  rows.innerHTML = (state.monitoring.items || []).map((site) => `<tr class="data-row" data-policy-site="${site.id}"><td><div class="cell-stack"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="sync_enabled" ${Number(site.sync_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 自动同步" /><span class="toggle-control"></span></label><input type="number" min="30" max="86400" value="${Number(site.sync_interval_seconds || 180)}" data-policy-field="sync_interval_seconds" aria-label="${escapeHtml(site.name)} 同步周期" /></div></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="key_check_enabled" ${Number(site.key_check_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} Key 探测" /><span class="toggle-control"></span></label><input type="number" min="60" max="86400" value="${Number(site.key_check_interval_seconds || 300)}" data-policy-field="key_check_interval_seconds" aria-label="${escapeHtml(site.name)} Key 探测周期" /></div></td><td><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="alert_notifications_enabled" ${Number(site.alert_notifications_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 微信通知" /><span class="toggle-control"></span></label></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="low_balance_alert_enabled" ${Number(site.low_balance_alert_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 余额预警" /><span class="toggle-control"></span></label><input type="number" min="0" step="0.0001" value="${Number(site.low_balance_threshold ?? 10)}" data-policy-field="low_balance_threshold" aria-label="${escapeHtml(site.name)} 余额阈值" /></div></td><td><input class="policy-number" type="number" min="0" value="${Number(site.rate_change_threshold_percent ?? 20)}" data-policy-field="rate_change_threshold_percent" aria-label="${escapeHtml(site.name)} 倍率变化阈值" /></td><td class="align-right"><button class="icon-btn" type="button" data-save-upstream-policy="${site.id}" title="保存上游策略"><i data-lucide="save"></i></button></td></tr>`).join('') || '<tr><td colspan="7"><div class="empty-state">还没有上游</div></td></tr>';
+}
+
+function setSettingsTab(tab) {
+  state.settingsTab = tab;
+  document.querySelectorAll('[data-settings-tab]').forEach((button) => button.classList.toggle('active', button.dataset.settingsTab === tab));
+  document.querySelectorAll('[data-settings-panel]').forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== tab; });
+  refreshIcons();
+}
+
+function renderSettings() {
+  const status = state.runtimeSettings || {};
+  const settings = status.settings;
+  if (!settings) return;
+  document.querySelectorAll('[data-runtime-setting]').forEach((input) => {
+    const value = settings[input.dataset.runtimeSetting];
+    if (input.type === 'checkbox') input.checked = Boolean(value);
+    else input.value = value ?? '';
+  });
+  const source = status.source === 'database' ? '控制台配置，保存后热生效' : '当前使用环境默认值';
+  document.querySelector('#runtimeSettingsStatus').textContent = status.warning || source;
+  const syncLocked = Boolean(status.locks?.sync_scheduler);
+  const keyLocked = Boolean(status.locks?.key_check_scheduler);
+  document.querySelector('#syncSchedulerLockText').textContent = syncLocked ? '已被环境变量强制停用' : '仅扫描到期上游，保存不会立即同步';
+  document.querySelector('#keySchedulerLockText').textContent = keyLocked ? '已被环境变量强制停用' : '真实请求会产生极低但非零的消耗';
+  document.querySelector('[data-runtime-setting="sync_enabled"]').disabled = syncLocked;
+  document.querySelector('[data-runtime-setting="key_check_enabled"]').disabled = keyLocked;
+  renderUpstreamPolicies();
+  setSettingsTab(state.settingsTab);
+}
+
+function collectRuntimeSettings() {
+  return Object.fromEntries([...document.querySelectorAll('[data-runtime-setting]')].map((input) => {
+    const value = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
+    return [input.dataset.runtimeSetting, value];
+  }));
+}
+
+function collectUpstreamPolicy(row) {
+  return Object.fromEntries([...row.querySelectorAll('[data-policy-field]')].map((input) => {
+    const value = input.type === 'checkbox' ? input.checked : Number(input.value);
+    return [input.dataset.policyField, value];
+  }));
 }
 
 function renderLogs() {
@@ -378,6 +470,7 @@ function renderCurrentView() {
   if (state.activeView === 'usage') renderUsage();
   if (state.activeView === 'alerts') renderAlerts();
   if (state.activeView === 'logs') renderLogs();
+  if (state.activeView === 'settings') renderSettings();
   renderPushPlus();
   refreshIcons();
 }
@@ -492,14 +585,15 @@ async function openUsageDetail(usageId) {
 async function refreshAll({ quiet = false } = {}) {
   if (!quiet) setBusy(true);
   try {
-    const [monitoring, alerts, logs, rateChanges, pricing, ownSites, ownRoutes] = await Promise.all([
+    const [monitoring, alerts, logs, rateChanges, pricing, ownSites, ownRoutes, runtimeSettings] = await Promise.all([
       api('/api/monitoring/upstreams'),
       api('/api/alerts'),
       api('/api/sync-logs'),
       api('/api/rate-changes'),
       api('/api/model-pricing/board').catch(() => ({ openai: [], claude: [] })),
       api('/api/own-sites').catch(() => ({ items: [] })),
-      api('/api/own-site-routes').catch(() => ({ items: [] }))
+      api('/api/own-site-routes').catch(() => ({ items: [] })),
+      api('/api/settings/runtime')
     ]);
     state.monitoring = monitoring;
     state.alerts = alerts.items || [];
@@ -508,6 +602,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.pricing = pricing;
     state.ownSites = ownSites.items || [];
     state.ownRoutes = ownRoutes.items || [];
+    state.runtimeSettings = runtimeSettings;
     renderOverview();
     renderMonitoring();
     renderGlobalKeys();
@@ -516,6 +611,7 @@ async function refreshAll({ quiet = false } = {}) {
     renderAlerts();
     renderLogs();
     renderPushPlus();
+    renderSettings();
     renderCurrentView();
     if (state.activeView === 'usage' && !state.usage.loading && !state.usage.items.length) {
       window.queueMicrotask(loadUsage);
@@ -568,6 +664,7 @@ function probeSourceText(item) {
   if (item.discovery_status === 'live') return '模型接口';
   if (item.discovery_status === 'usage') return '近期使用记录';
   if (item.discovery_status === 'manual_only') return '手动配置';
+  if (item.discovery_status === 'stale') return '保留上次缓存';
   return '未发现模型';
 }
 
@@ -715,11 +812,42 @@ document.querySelector('#usageRefreshBtn').addEventListener('click', loadUsage);
 document.querySelector('#usagePrevBtn').addEventListener('click', () => { if (state.usage.page > 1) { state.usage.page -= 1; loadUsage(); } });
 document.querySelector('#usageNextBtn').addEventListener('click', () => { if (state.usage.page < state.usage.pages) { state.usage.page += 1; loadUsage(); } });
 document.querySelector('#alertStatusFilter').addEventListener('change', (event) => { state.alertStatus = event.target.value; renderAlerts(); });
+document.querySelectorAll('[data-settings-tab]').forEach((button) => button.addEventListener('click', () => setSettingsTab(button.dataset.settingsTab)));
 document.querySelector('#createKeyUpstream').addEventListener('change', loadCreateKeyGroups);
 document.querySelector('#createKeyPlatform').addEventListener('change', loadCreateKeyGroups);
 
 document.querySelector('#refreshBtn').addEventListener('click', (event) => runAction(event.currentTarget, '刷新中', async () => { await refreshAll({ quiet: true }); toast('数据已刷新', 'success'); }));
 document.querySelector('#syncAllBtn').addEventListener('click', (event) => runAction(event.currentTarget, '同步中', async () => { await api('/api/sync-all', { method: 'POST' }); await refreshAll({ quiet: true }); toast('全部上游同步完成', 'success'); }));
+
+document.querySelector('#runtimeSettingsSaveBtn').addEventListener('click', async (event) => {
+  const next = collectRuntimeSettings();
+  const current = state.runtimeSettings.settings || {};
+  const increasesProbeActivity = next.key_check_enabled && (
+    !current.key_check_enabled
+    || Number(next.key_check_default_interval_seconds) < Number(current.key_check_default_interval_seconds)
+    || Number(next.key_scheduler_scan_seconds) < Number(current.key_scheduler_scan_seconds)
+    || Number(next.key_check_concurrency) > Number(current.key_check_concurrency)
+  );
+  if (increasesProbeActivity && !confirm('这些设置可能增加真实模型探测频率和消耗，确定保存？')) return;
+  await runAction(event.currentTarget, '保存中', async () => {
+    state.runtimeSettings = await api('/api/settings/runtime', { method: 'PUT', body: JSON.stringify(next) });
+    renderSettings();
+    toast('运行设置已保存，无需重启', 'success');
+  });
+});
+
+document.querySelector('#acknowledgeVisibleAlertsBtn').addEventListener('click', async (event) => {
+  const ids = filteredAlerts().filter((item) => alertStage(item) === 'pending').map((item) => item.id);
+  if (!ids.length) return;
+  if (!confirm(`确定将当前 ${ids.length} 条告警标记为已处理？`)) return;
+  await runAction(event.currentTarget, '处理中', async () => {
+    await api('/api/alerts/acknowledge-all', { method: 'POST', body: JSON.stringify({ ids }) });
+    await refreshAll({ quiet: true });
+    toast(`已处理 ${ids.length} 条告警`, 'success');
+  });
+  renderAlerts();
+  refreshIcons();
+});
 
 document.querySelector('#pushPlusForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -763,7 +891,7 @@ document.querySelector('#syncProbeModelsBtn').addEventListener('click', async (e
   if (!siteId) throw new Error('请先保存上游');
   const result = await api(`/api/upstreams/${siteId}/models/sync`, { method: 'POST' });
   renderProbeModels(result.items || []);
-  toast(`模型同步完成：接口 ${result.live_groups} 个分组，使用记录回退 ${result.fallback_groups} 个分组`, 'success');
+  toast(`模型同步完成：接口 ${result.live_groups}，使用记录 ${result.fallback_groups}，保留缓存 ${result.stale_groups || 0}`, 'success');
 }));
 
 document.querySelector('#probeModelGroups').addEventListener('change', async (event) => {
@@ -781,6 +909,25 @@ document.querySelector('#probeModelGroups').addEventListener('change', async (ev
     });
     toast('分组检测模型已保存', 'success');
   } catch (error) {
+    toast(error.message, 'error');
+  }
+});
+
+document.addEventListener('change', async (event) => {
+  const select = event.target.closest('[data-key-probe-model]');
+  if (!select) return;
+  const previous = select.dataset.previousModel || '';
+  select.disabled = true;
+  try {
+    await api(`/api/upstreams/${select.dataset.siteId}/keys/${encodeURIComponent(select.dataset.keyProbeModel)}/probe-model`, {
+      method: 'PUT',
+      body: JSON.stringify({ selected_model: select.value })
+    });
+    await refreshAll({ quiet: true });
+    toast(select.value ? 'Key 检测模型已保存' : 'Key 已改为跟随分组', 'success');
+  } catch (error) {
+    select.value = previous;
+    select.disabled = false;
     toast(error.message, 'error');
   }
 });
@@ -886,6 +1033,15 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.deleteOwnSite) { if (!confirm('确定删除这个自己站？')) return; await api(`/api/own-sites/${target.dataset.deleteOwnSite}`, { method: 'DELETE' }); await refreshAll({ quiet: true }); return; }
   if (target.dataset.bindRoute) return openRouteBinding(Number(target.dataset.ownSiteId), target.dataset.bindRoute);
   if (target.dataset.ackRate) { await api(`/api/rate-changes/${target.dataset.ackRate}/ack`, { method: 'POST' }); await refreshAll({ quiet: true }); return; }
+  if (target.dataset.ackAlert) return runAction(target, '处理中', async () => { await api(`/api/alerts/${target.dataset.ackAlert}/acknowledge`, { method: 'POST' }); await refreshAll({ quiet: true }); toast('告警已标记为已处理', 'success'); });
+  if (target.dataset.saveUpstreamPolicy) {
+    const row = target.closest('[data-policy-site]');
+    return runAction(target, '保存中', async () => {
+      await api(`/api/upstreams/${target.dataset.saveUpstreamPolicy}`, { method: 'PUT', body: JSON.stringify(collectUpstreamPolicy(row)) });
+      await refreshAll({ quiet: true });
+      toast('上游策略已保存', 'success');
+    });
+  }
   if (target.dataset.createRecharge) return runAction(target, '创建中', async () => { const result = await api(`/api/upstreams/${target.dataset.createRecharge}/recharge-orders`, { method: 'POST', body: JSON.stringify({ amount: Number(document.querySelector('#detailRechargeAmount').value), payment_type: document.querySelector('#detailRechargeMethod').value, order_type: 'balance' }) }); document.querySelector('#detailRechargeResult').innerHTML = `<div class="detail-block"><div class="detail-line"><span>订单状态</span><strong>${escapeHtml(result.order?.status || 'PENDING')}</strong></div>${result.order?.pay_url ? `<a class="btn primary" href="${escapeHtml(result.order.pay_url)}" target="_blank" rel="noreferrer">打开收银台</a>` : ''}</div>`; });
   if (target.dataset.action === 'pushplus-test') return runAction(target, '发送中', async () => { await api('/api/notifications/pushplus/test', { method: 'POST' }); toast('测试推送已发送', 'success'); });
   if (target.dataset.action === 'pushplus-clear') {

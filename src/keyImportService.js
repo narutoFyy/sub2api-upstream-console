@@ -56,8 +56,17 @@ async function importAllKeys(siteId, dependencies = {}) {
     const creds = repository.getCredentials(siteId) || {};
     const result = await fetchAllSub2APIKeys(site, creds, dependencies);
     const capturedAt = nowIso();
-    const summary = repository.reconcileKeySnapshots(siteId, result.items, capturedAt, { markMissing: true });
-    const fullKeyCount = result.items.filter((item) => Boolean(item.key_full)).length;
+    const reconciled = repository.reconcileImportedKeys
+      ? repository.reconcileImportedKeys(siteId, result.items, capturedAt, { markMissing: true })
+      : {
+          summary: repository.reconcileKeySnapshots(siteId, result.items, capturedAt, { markMissing: true }),
+          secrets: repository.reconcileKeySecrets
+            ? repository.reconcileKeySecrets(siteId, result.items, { removeMissing: true, at: capturedAt })
+            : null
+        };
+    const summary = reconciled.summary;
+    const fullKeyCount = reconciled.secrets?.full_key_count
+      ?? result.items.filter((item) => Boolean(item.key_full)).length;
     const run = repository.finishKeyImportRun(runId, {
       status: 'success',
       pages: result.pages,
@@ -68,7 +77,7 @@ async function importAllKeys(siteId, dependencies = {}) {
       group_changes: summary.group_changes,
       full_key_count: fullKeyCount
     }, capturedAt);
-    return { run, summary, full_key_count: fullKeyCount };
+    return { run, summary, secret_summary: reconciled.secrets, full_key_count: fullKeyCount };
   } catch (error) {
     repository.finishKeyImportRun(runId, {
       status: 'failed',

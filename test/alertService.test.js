@@ -2,7 +2,12 @@ require('./testEnv');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { pushPlusStatus, resolvePushPlusToken, sendPushPlus } = require('../src/pushPlusClient');
-const { evaluateKeyConnectivity, evaluateSiteAlerts } = require('../src/alertService');
+const {
+  evaluateKeyConnectivity,
+  evaluateSiteAlerts,
+  deliverAlertNotifications,
+  isQuietHours
+} = require('../src/alertService');
 
 function alertRepository() {
   const alerts = [];
@@ -10,6 +15,9 @@ function alertRepository() {
     alerts,
     findOpenAlert(fingerprint) {
       return alerts.find((item) => item.fingerprint === fingerprint && item.status === 'open') || null;
+    },
+    findLatestAlert(fingerprint) {
+      return [...alerts].reverse().find((item) => item.fingerprint === fingerprint) || null;
     },
     openOrTouchAlert(input) {
       const existing = this.findOpenAlert(input.fingerprint);
@@ -20,7 +28,10 @@ function alertRepository() {
     },
     markAlertNotified(id) {
       const alert = alerts.find((item) => item.id === id);
-      alert.notified_at = new Date().toISOString();
+      const now = new Date().toISOString();
+      alert.notified_at ||= now;
+      alert.last_notified_at = now;
+      alert.notification_count = Number(alert.notification_count || 0) + 1;
       return alert;
     },
     resolveAlert(fingerprint) {
@@ -120,4 +131,136 @@ test('notification failure keeps the incident recorded without throwing', async 
   assert.equal(repository.alerts.length, 1);
   assert.equal(result.notification_error, 'PushPlus unavailable');
   assert.deepEqual(errors, ['PushPlus unavailable']);
+});
+
+test('multiple Key incidents keep separate records but send one upstream notification', async () => {
+  const repository = alertRepository();
+  const messages = [];
+  const settings = {
+    notifications_enabled: true,
+    notify_key_connectivity: true,
+    notify_ip_blocked: true,
+    notification_grouping: 'upstream',
+    alert_failure_threshold: 1,
+    alert_recovery_threshold: 1,
+    alert_repeat_interval_seconds: 0,
+    quiet_hours_enabled: false,
+    pushplus_timeout_ms: 10000
+  };
+  const site = { id: 11, name: 'Grouped API', alert_notifications_enabled: 1 };
+  const first = await evaluateKeyConnectivity(site, { id: 1, name: 'A', key_masked: 'sk-a...0001' }, {
+    status: 'timeout', consecutive_failures: 1
+  }, { repo: repository, settings, deferNotification: true });
+  const second = await evaluateKeyConnectivity(site, { id: 2, name: 'B', key_masked: 'sk-b...0002' }, {
+    status: 'auth_failed', consecutive_failures: 1
+  }, { repo: repository, settings, deferNotification: true });
+
+  await deliverAlertNotifications([first.notification, second.notification], {
+    repo: repository,
+    settings,
+    notify: async (message) => { messages.push(message); }
+  });
+  assert.equal(repository.alerts.length, 2);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].title, /2 个事件/);
+  assert.equal(repository.alerts.every((item) => item.notified_at), true);
+});
+
+test('IP blocks and quiet hours can suppress delivery without hiding incidents', async () => {
+  const repository = alertRepository();
+  const settings = {
+    notifications_enabled: true,
+    notify_key_connectivity: true,
+    notify_ip_blocked: false,
+    notification_grouping: 'upstream',
+    alert_failure_threshold: 1,
+    alert_recovery_threshold: 1,
+    alert_repeat_interval_seconds: 0,
+    quiet_hours_enabled: false
+  };
+  const result = await evaluateKeyConnectivity(
+    { id: 12, name: 'Muted API', alert_notifications_enabled: 1 },
+    { id: 3, key_masked: 'sk-c...0003' },
+    { status: 'upstream_error', error_code: 'ip_blocked', consecutive_failures: 1 },
+    { repo: repository, settings, deferNotification: true }
+  );
+  assert.equal(repository.alerts.length, 1);
+  assert.equal(result.notification, null);
+  assert.equal(isQuietHours({ quiet_hours_enabled: true, quiet_hours_start: '22:00', quiet_hours_end: '07:00' }, new Date(2026, 0, 1, 23, 30)), true);
+});
+
+test('open incidents become eligible for reminders only after the configured interval', async () => {
+  const repository = alertRepository();
+  const settings = {
+    notifications_enabled: true,
+    notify_key_connectivity: true,
+    notify_ip_blocked: true,
+    notification_grouping: 'key',
+    alert_failure_threshold: 1,
+    alert_recovery_threshold: 1,
+    alert_repeat_interval_seconds: 60,
+    quiet_hours_enabled: false,
+    pushplus_timeout_ms: 10000
+  };
+  const site = { id: 13, name: 'Reminder API', alert_notifications_enabled: 1 };
+  const key = { id: 4, key_masked: 'sk-d...0004' };
+  const initial = await evaluateKeyConnectivity(site, key, { status: 'timeout', consecutive_failures: 1 }, {
+    repo: repository,
+    settings,
+    deferNotification: true,
+    now: new Date('2026-07-21T00:00:00.000Z')
+  });
+  await deliverAlertNotifications([initial.notification], { repo: repository, settings, notify: async () => {} });
+  repository.alerts[0].last_notified_at = '2026-07-21T00:00:00.000Z';
+
+  const early = await evaluateKeyConnectivity(site, key, { status: 'timeout', consecutive_failures: 2 }, {
+    repo: repository,
+    settings,
+    deferNotification: true,
+    now: new Date('2026-07-21T00:00:30.000Z')
+  });
+  const due = await evaluateKeyConnectivity(site, key, { status: 'timeout', consecutive_failures: 3 }, {
+    repo: repository,
+    settings,
+    deferNotification: true,
+    now: new Date('2026-07-21T00:01:01.000Z')
+  });
+  assert.equal(early.notification, null);
+  assert.ok(due.notification);
+});
+
+test('acknowledged incidents suppress retries but still resolve on recovery', async () => {
+  const repository = alertRepository();
+  const settings = {
+    notifications_enabled: true,
+    notify_key_connectivity: true,
+    notify_recovery: true,
+    notify_ip_blocked: true,
+    notification_grouping: 'key',
+    alert_failure_threshold: 1,
+    alert_recovery_threshold: 1,
+    alert_repeat_interval_seconds: 1,
+    quiet_hours_enabled: false
+  };
+  const site = { id: 14, name: 'Handled API', alert_notifications_enabled: 1 };
+  const key = { id: 5, key_masked: 'sk-e...0005' };
+  const incident = await evaluateKeyConnectivity(site, key, { status: 'timeout', consecutive_failures: 1 }, {
+    repo: repository, settings, deferNotification: true
+  });
+  repository.markAlertNotified(incident.alert.id);
+  incident.alert.acknowledged_at = '2026-07-21T00:00:00.000Z';
+
+  const repeated = await evaluateKeyConnectivity(site, key, { status: 'timeout', consecutive_failures: 2 }, {
+    repo: repository,
+    settings,
+    deferNotification: true,
+    now: new Date('2026-07-21T00:10:00.000Z')
+  });
+  assert.equal(repeated.notification, null);
+
+  const recovered = await evaluateKeyConnectivity(site, key, { status: 'connected', consecutive_successes: 1 }, {
+    repo: repository, settings, deferNotification: true
+  });
+  assert.equal(recovered.alert.status, 'resolved');
+  assert.ok(recovered.notification);
 });

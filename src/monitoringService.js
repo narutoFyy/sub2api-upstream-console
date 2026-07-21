@@ -11,7 +11,36 @@ function siteFreshness(site, now = Date.now()) {
 
 function buildUpstreamMonitoring(repository = repo, now = Date.now()) {
   const items = repository.listSites().map((site) => {
-    const keys = repository.listKeySnapshotsWithHealth(site.id, { includeMissing: true }, 5000);
+    const modelGroups = repository.listUpstreamProbeModels?.(site.id) || [];
+    const modelsByGroup = new Map(modelGroups.map((group) => [
+      String(group.group_id),
+      (group.models || []).map((item) => item.model).filter(Boolean)
+    ]));
+    const modelsByPlatform = new Map();
+    for (const group of modelGroups) {
+      const platform = String(group.platform || '').toLowerCase();
+      const normalized = platform.includes('anthropic') || platform.includes('claude') ? 'anthropic' : 'openai';
+      const current = modelsByPlatform.get(normalized) || new Set();
+      for (const item of group.models || []) {
+        if (item.model) current.add(item.model);
+      }
+      modelsByPlatform.set(normalized, current);
+    }
+    const keys = repository.listKeySnapshotsWithHealth(site.id, { includeMissing: true }, 5000).map((key) => {
+      const platform = String(key.platform || '').toLowerCase();
+      const platformFallback = platform.includes('anthropic') || platform.includes('claude')
+        ? site.anthropic_probe_model
+        : site.openai_probe_model;
+      const normalizedPlatform = platform.includes('anthropic') || platform.includes('claude') ? 'anthropic' : 'openai';
+      const groupOptions = modelsByGroup.get(String(key.group_id ?? '')) || [];
+      return {
+        ...key,
+        probe_model_options: groupOptions.length
+          ? groupOptions
+          : [...(modelsByPlatform.get(normalizedPlatform) || [])],
+        effective_probe_model: key.selected_probe_model || key.group_probe_model || platformFallback || ''
+      };
+    });
     const freshness = siteFreshness(site, now);
     const activeKeys = keys.filter((key) => key.import_state !== 'missing');
     const abnormalKeys = activeKeys.filter((key) => KEY_FAILURE_STATES.has(key.connectivity_status)).length;

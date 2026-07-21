@@ -5,16 +5,18 @@ const { z } = require('zod');
 const config = require('./config');
 const repo = require('./repository');
 const { seedFromEnv } = require('./seed');
-const { syncSite, syncAllSites, syncDueSites } = require('./syncService');
+const { syncSite, syncAllSites } = require('./syncService');
 const { createPaymentOrder, fetchSub2APIState, getPaymentOrder } = require('./upstreamClient');
 const { fetchOwnSiteRoutes } = require('./ownSiteClient');
 const { importAllKeys } = require('./keyImportService');
 const { buildUpstreamMonitoring } = require('./monitoringService');
-const { checkUpstreamKeys, checkDueUpstreams } = require('./keyConnectivityService');
+const { checkUpstreamKeys } = require('./keyConnectivityService');
 const { pushPlusStatus, sendPushPlus } = require('./pushPlusClient');
 const { syncUpstreamModels } = require('./modelDiscoveryService');
 const { updateManagedKey, deleteManagedKey } = require('./keyMutationService');
 const { queryUpstreamUsage, getUpstreamUsageDetail } = require('./upstreamUsage');
+const { runtimeSettingsStatus, updateRuntimeSettings } = require('./runtimeSettings');
+const { startRuntimeScheduler, schedulerAllowed } = require('./runtimeScheduler');
 const {
   listSub2APIKeys,
   listSub2APIGroups,
@@ -130,22 +132,33 @@ function parseList(value, fallback = []) {
   return fallback;
 }
 
+function parseBoolean(value, fallback = true) {
+  if (typeof value === 'boolean') return value;
+  if (value === 'false' || value === '0' || value === 0) return false;
+  if (value === 'true' || value === '1' || value === 1) return true;
+  return fallback;
+}
+
 function sanitizeSitePayload(payload, { partial = false } = {}) {
   const next = { ...payload };
+  const defaults = runtimeSettingsStatus().settings;
   if ('tags' in next || !partial) {
     next.tags = parseList(next.tags);
   }
   if ('low_balance_threshold' in next || !partial) {
-    next.low_balance_threshold = Number(next.low_balance_threshold ?? 10);
+    next.low_balance_threshold = Number(next.low_balance_threshold ?? defaults.upstream_default_low_balance_threshold);
   }
   if ('rate_change_threshold_percent' in next || !partial) {
-    next.rate_change_threshold_percent = Number(next.rate_change_threshold_percent ?? 20);
+    next.rate_change_threshold_percent = Number(next.rate_change_threshold_percent ?? defaults.upstream_default_rate_change_threshold_percent);
+  }
+  for (const field of ['sync_enabled', 'key_check_enabled', 'alert_notifications_enabled', 'low_balance_alert_enabled']) {
+    if (field in next || !partial) next[field] = parseBoolean(next[field], true);
   }
   if ('sync_interval_seconds' in next || !partial) {
-    next.sync_interval_seconds = Number(next.sync_interval_seconds ?? 180);
+    next.sync_interval_seconds = Number(next.sync_interval_seconds ?? defaults.sync_default_interval_seconds);
   }
   if ('key_check_interval_seconds' in next || !partial) {
-    next.key_check_interval_seconds = Number(next.key_check_interval_seconds ?? 300);
+    next.key_check_interval_seconds = Number(next.key_check_interval_seconds ?? defaults.key_check_default_interval_seconds);
   }
   return {
     ...next
@@ -164,8 +177,12 @@ const siteSchema = z.object({
   notes: z.string().optional().default(''),
   low_balance_threshold: z.number().min(0).max(100000000).optional().default(10),
   rate_change_threshold_percent: z.number().min(0).max(100000).optional().default(20),
+  sync_enabled: z.boolean().optional().default(true),
   sync_interval_seconds: z.number().int().min(30).max(86400).optional().default(180),
+  key_check_enabled: z.boolean().optional().default(true),
   key_check_interval_seconds: z.number().int().min(60).max(86400).optional().default(300),
+  alert_notifications_enabled: z.boolean().optional().default(true),
+  low_balance_alert_enabled: z.boolean().optional().default(true),
   openai_probe_model: z.string().max(200).optional().default(''),
   anthropic_probe_model: z.string().max(200).optional().default('')
 });
@@ -182,8 +199,12 @@ const siteUpdateSchema = z.object({
   notes: z.string().optional(),
   low_balance_threshold: z.number().min(0).max(100000000).optional(),
   rate_change_threshold_percent: z.number().min(0).max(100000).optional(),
+  sync_enabled: z.boolean().optional(),
   sync_interval_seconds: z.number().int().min(30).max(86400).optional(),
+  key_check_enabled: z.boolean().optional(),
   key_check_interval_seconds: z.number().int().min(60).max(86400).optional(),
+  alert_notifications_enabled: z.boolean().optional(),
+  low_balance_alert_enabled: z.boolean().optional(),
   openai_probe_model: z.string().max(200).optional(),
   anthropic_probe_model: z.string().max(200).optional()
 });
@@ -216,10 +237,18 @@ const pushPlusSettingSchema = z.object({
   token: z.string().trim().min(8).max(500)
 });
 
+const alertAcknowledgeSchema = z.object({
+  ids: z.array(z.number().int().positive()).max(1000).optional().default([])
+}).strict();
+
 const groupProbeModelSchema = z.object({
   selected_model: z.string().trim().max(200),
   group_name: z.string().max(200).optional().default(''),
   platform: z.string().max(100).optional().default('')
+});
+
+const keyProbeModelSchema = z.object({
+  selected_model: z.string().trim().max(200)
 });
 
 const ownSiteSchema = z.object({
@@ -448,7 +477,8 @@ app.delete('/api/upstreams/:id', (req, res) => {
 app.get('/api/monitoring/upstreams', (req, res) => {
   const monitoring = buildUpstreamMonitoring(repo);
   monitoring.pushplus = pushPlusStatus();
-  monitoring.open_alerts = repo.listAlerts({ status: 'open' }, 500).length;
+  monitoring.open_alerts = repo.listAlerts({ status: 'open' }, 500)
+    .filter((item) => !item.acknowledged_at).length;
   res.json(monitoring);
 });
 
@@ -705,7 +735,7 @@ app.post('/api/upstreams/:id/keys/import', async (req, res, next) => {
       ok: true,
       run: result.run,
       summary: result.summary,
-      message: `Key 导入完成：新增 ${result.summary.added}，更新 ${result.summary.updated}，失效 ${result.summary.missing}，分组变化 ${result.summary.group_changes}`
+      message: `Key 导入完成：完整密钥 ${result.full_key_count}，新增 ${result.summary.added}，更新 ${result.summary.updated}，失效 ${result.summary.missing}，分组变化 ${result.summary.group_changes}`
     });
   } catch (err) {
     next(err);
@@ -714,9 +744,12 @@ app.post('/api/upstreams/:id/keys/import', async (req, res, next) => {
 
 app.post('/api/upstreams/:id/keys/check', async (req, res, next) => {
   try {
+    const settings = runtimeSettingsStatus().settings;
     res.json(await checkUpstreamKeys(Number(req.params.id), {
-      concurrency: config.keyCheckConcurrency,
-      timeoutMs: config.keyCheckTimeoutMs
+      settings,
+      concurrency: settings.key_check_concurrency,
+      timeoutMs: settings.key_check_timeout_ms,
+      maxKeyCheckLogs: settings.max_key_check_logs
     }));
   } catch (err) {
     next(err);
@@ -725,10 +758,13 @@ app.post('/api/upstreams/:id/keys/check', async (req, res, next) => {
 
 app.post('/api/upstreams/:id/keys/:keyId/check', async (req, res, next) => {
   try {
+    const settings = runtimeSettingsStatus().settings;
     res.json(await checkUpstreamKeys(Number(req.params.id), {
       keyId: req.params.keyId,
+      settings,
       concurrency: 1,
-      timeoutMs: config.keyCheckTimeoutMs
+      timeoutMs: settings.key_check_timeout_ms,
+      maxKeyCheckLogs: settings.max_key_check_logs
     }));
   } catch (err) {
     next(err);
@@ -752,8 +788,35 @@ app.get('/api/alerts', (req, res) => {
   });
 });
 
+app.post('/api/alerts/acknowledge-all', (req, res, next) => {
+  try {
+    const payload = alertAcknowledgeSchema.parse(req.body || {});
+    res.json({ ok: true, ...repo.acknowledgeAlerts(payload.ids) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/alerts/:id/acknowledge', (req, res) => {
+  const item = repo.acknowledgeAlert(Number(req.params.id));
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  return res.json({ ok: true, item });
+});
+
 app.get('/api/notifications/pushplus/status', (req, res) => {
   res.json(pushPlusStatus());
+});
+
+app.get('/api/settings/runtime', (req, res) => {
+  res.json(runtimeSettingsStatus());
+});
+
+app.put('/api/settings/runtime', (req, res, next) => {
+  try {
+    res.json({ ok: true, ...updateRuntimeSettings(req.body || {}) });
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.put('/api/notifications/pushplus/settings', (req, res, next) => {
@@ -818,6 +881,17 @@ app.put('/api/upstreams/:id/models/groups/:groupId', (req, res, next) => {
     if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
     const payload = groupProbeModelSchema.parse(req.body || {});
     return res.json({ item: repo.setGroupProbeModel(id, req.params.groupId, payload) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+app.put('/api/upstreams/:id/keys/:keyId/probe-model', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
+    const payload = keyProbeModelSchema.parse(req.body || {});
+    return res.json({ item: repo.setKeyProbeModel(id, req.params.keyId, payload.selected_model) });
   } catch (err) {
     return next(err);
   }
@@ -945,24 +1019,7 @@ app.get('/api/sync-logs', (req, res) => {
   res.json({ items: repo.listSyncLogs(null, 200) });
 });
 
-if (config.syncSchedulerEnabled) {
-  setInterval(() => {
-    syncDueSites().catch((err) => {
-      console.error('Scheduled sync failed:', err);
-    });
-  }, Math.max(10, config.syncSchedulerTickSeconds) * 1000).unref();
-}
-
-if (config.keyCheckSchedulerEnabled) {
-  setInterval(() => {
-    checkDueUpstreams({
-      concurrency: config.keyCheckConcurrency,
-      timeoutMs: config.keyCheckTimeoutMs
-    }).catch((err) => {
-      console.error('Scheduled Key check failed:', err);
-    });
-  }, Math.max(10, config.keyCheckSchedulerTickSeconds) * 1000).unref();
-}
+if (schedulerAllowed(config)) startRuntimeScheduler();
 
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 400;

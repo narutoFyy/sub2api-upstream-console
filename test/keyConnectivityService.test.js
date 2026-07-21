@@ -3,16 +3,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   classifyProbeError,
+  safeProbeError,
+  prefersResponsesProtocol,
   probeModelForKey,
   probeKey,
   checkUpstreamKeys,
   shouldCheckSite
 } = require('../src/keyConnectivityService');
 
-test('probeModelForKey prefers a group selection over site platform defaults', () => {
-  const repository = { getGroupProbeModel: (siteId, groupId) => siteId === 3 && groupId === 9 ? 'group-model' : '' };
-  assert.equal(probeModelForKey({ id: 3, openai_probe_model: 'site-model' }, { group_id: 9, platform: 'openai' }, repository), 'group-model');
-  assert.equal(probeModelForKey({ id: 3, openai_probe_model: 'site-model' }, { group_id: 10, platform: 'openai' }, repository), 'site-model');
+test('probeModelForKey resolves Key, group and site models in priority order', () => {
+  const repository = {
+    getKeyProbeModel: (siteId, keyId) => siteId === 3 && keyId === 4 ? 'key-model' : '',
+    getGroupProbeModel: (siteId, groupId) => siteId === 3 && groupId === 9 ? 'group-model' : ''
+  };
+  assert.equal(probeModelForKey({ id: 3, openai_probe_model: 'site-model' }, { id: 4, group_id: 9, platform: 'openai' }, repository), 'key-model');
+  assert.equal(probeModelForKey({ id: 3, openai_probe_model: 'site-model' }, { id: 5, group_id: 9, platform: 'openai' }, repository), 'group-model');
+  assert.equal(probeModelForKey({ id: 3, openai_probe_model: 'site-model' }, { id: 5, group_id: 10, platform: 'openai' }, repository), 'site-model');
 });
 
 test('classifyProbeError distinguishes timeout, auth, quota and rate limit', () => {
@@ -20,13 +26,19 @@ test('classifyProbeError distinguishes timeout, auth, quota and rate limit', () 
   assert.equal(classifyProbeError({ status: 401, message: 'no' }).status, 'auth_failed');
   assert.equal(classifyProbeError({ status: 402, message: 'no credit' }).status, 'quota_exhausted');
   assert.equal(classifyProbeError({ status: 429, message: 'busy' }).error_code, 'rate_limited');
+  const blocked = classifyProbeError({ status: 403, message: 'Access denied. Your IP is 185.220.239.32' });
+  assert.equal(blocked.status, 'upstream_error');
+  assert.equal(blocked.error_code, 'ip_blocked');
+  assert.equal(blocked.error_message.includes('185.220.239.32'), false);
+  assert.equal(safeProbeError('Bearer token sk-secret-value-123456 at 185.220.239.32').includes('sk-secret'), false);
+  assert.equal(prefersResponsesProtocol('gpt-5.6-sol'), true);
 });
 
 test('probeKey requires a full Key and configured model', async () => {
   const site = { base_url: 'https://fixture.example', openai_probe_model: '' };
   const unavailable = await probeKey(site, { platform: 'openai', key_full: null });
   assert.equal(unavailable.status, 'unavailable');
-  const unconfigured = await probeKey(site, { platform: 'openai', key_full: 'sk-secret' });
+  const unconfigured = await probeKey(site, { platform: 'openai', key_full: 'sk-complete-secret-123456' });
   assert.equal(unconfigured.status, 'unconfigured');
 });
 
@@ -34,13 +46,26 @@ test('probeKey sends an inference request without exposing the Key in its result
   let requestOptions = null;
   const result = await probeKey(
     { base_url: 'https://fixture.example', openai_probe_model: 'probe-model' },
-    { platform: 'openai', key_full: 'sk-secret' },
+    { platform: 'openai', key_full: 'sk-complete-secret-123456' },
     { request: async (baseUrl, path, options) => { requestOptions = { baseUrl, path, options }; return {}; } }
   );
   assert.equal(result.status, 'connected');
   assert.equal(requestOptions.path, '/chat/completions');
-  assert.equal(requestOptions.options.token, 'sk-secret');
-  assert.equal(JSON.stringify(result).includes('sk-secret'), false);
+  assert.equal(requestOptions.options.token, 'sk-complete-secret-123456');
+  assert.equal(JSON.stringify(result).includes('sk-complete-secret-123456'), false);
+});
+
+test('gpt-5 probes use the Responses API with bounded output', async () => {
+  let requestOptions = null;
+  const result = await probeKey(
+    { base_url: 'https://fixture.example', openai_probe_model: 'gpt-5.6-sol' },
+    { platform: 'openai', key_full: 'sk-complete-secret-123456' },
+    { request: async (baseUrl, path, options) => { requestOptions = { path, options }; return {}; } }
+  );
+  assert.equal(result.status, 'connected');
+  assert.equal(result.endpoint, '/v1/responses');
+  assert.equal(requestOptions.path, '/responses');
+  assert.equal(requestOptions.options.body.max_output_tokens, 16);
 });
 
 test('checkUpstreamKeys records all live results and returns safe rows', async () => {
@@ -49,6 +74,7 @@ test('checkUpstreamKeys records all live results and returns safe rows', async (
     getSite: () => ({ id: 2, name: 'Fixture', status: 'active', openai_probe_model: 'model' }),
     getCredentials: () => ({ token: 'admin' }),
     reconcileKeySnapshots: () => ({}),
+    attachKeySecrets: (siteId, keys) => keys.map((key) => ({ ...key, key_full: `sk-complete-secret-${key.id}-123456` })),
     recordKeyConnectivityCheck: (siteId, keyId, result) => {
       recorded.push({ siteId, keyId, result });
       return { current: { ...result, consecutive_failures: result.status === 'timeout' ? 1 : 0 } };
@@ -59,7 +85,10 @@ test('checkUpstreamKeys records all live results and returns safe rows', async (
     total: 2,
     pages: 1
   });
-  const probe = async (site, key) => ({ status: key.id === 1 ? 'connected' : 'timeout', checked_at: new Date().toISOString() });
+  const probe = async (site, key) => {
+    assert.match(key.key_full, /^sk-complete-secret-/);
+    return { status: key.id === 1 ? 'connected' : 'timeout', checked_at: new Date().toISOString() };
+  };
   const result = await checkUpstreamKeys(2, { repo: repository, listKeys, probe, concurrency: 2 });
   assert.equal(recorded.length, 2);
   assert.equal(result.connected, 1);

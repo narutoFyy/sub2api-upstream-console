@@ -20,7 +20,11 @@ async function refreshManagedKeys(siteId, dependencies = {}) {
     listKeys: dependencies.listKeys || listSub2APIKeys,
     pageSize: dependencies.pageSize || 100
   });
-  const summary = repository.reconcileKeySnapshots(siteId, result.items, nowIso(), { markMissing: true });
+  const capturedAt = nowIso();
+  const reconciled = repository.reconcileImportedKeys
+    ? repository.reconcileImportedKeys(siteId, result.items, capturedAt, { markMissing: true })
+    : { summary: repository.reconcileKeySnapshots(siteId, result.items, capturedAt, { markMissing: true }) };
+  const summary = reconciled.summary;
   return { items: result.items, summary };
 }
 

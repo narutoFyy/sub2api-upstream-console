@@ -4,86 +4,89 @@
 
 - Mode: `state-main`
 - Topology: `linear`
-- Outcome: Make PushPlus configurable, synchronize selectable probe models, restore trustworthy Key actions and hierarchy, remove desktop-only navigation controls, and expose real per-request upstream usage.
-- UI direction: Preserve the approved operations-console visual language and information density.
-- Non-goals: No automatic upstream switching, disabling, Key deletion, local usage-log mirroring, or real destructive Key verification.
-- Git baseline: Clean `main` worktree at `9d314c1`.
+- Outcome: Turn Settings into a safe runtime operations center for automatic sync, paid Key probes, PushPlus delivery rules, per-upstream overrides, retention, and manual alert acknowledgement.
+- UI direction: Preserve the approved operations-console layout and visual language; use compact setting tabs, switches, numeric controls, and the existing dense table patterns.
+- Non-goals: No browser editing of `APP_SECRET`, database path, port, admin/session secrets, or PushPlus base URL; no automatic model-catalog sync; no automatic upstream switching, Key disabling, or destructive Key actions.
+- Git baseline: The worktree contains the completed prior goal built from clean commit `f5a0f76`; all of those uncommitted product changes must be preserved.
+- Runtime guardrail: The port 4317 server was stopped before implementation so automatic sync, paid inference probes, and notifications cannot run while settings behavior is incomplete.
 
 ## Delivery Truth
 
-- Local verification: migrations, encrypted settings, model discovery fallbacks, Key mutation reconciliation, sanitized usage proxy, responsive browser flows, and the full automated suite.
-- Real-environment verification: read-only model/usage queries against the connected Sub2API upstream.
-- User-assisted verification: actual PushPlus delivery after a token is saved in Settings.
-- Destructive real-Key operations remain unverified unless the user supplies an expendable Key; simulated integration coverage is required instead.
+- Local verification: additive migration compatibility, typed runtime-setting persistence, scheduler due logic, notification grouping/deduplication, acknowledgement semantics, APIs, and desktop/mobile browser flows.
+- Real-environment verification: one explicitly labeled PushPlus test message only. No full-batch inference probe is required for this goal.
+- Environment precedence: startup environment flags remain hard emergency disables; database settings are runtime controls only when the corresponding environment scheduler is allowed.
+- Completion claim: The work is complete only when settings save without restart, acknowledged incidents remain distinct from recovered incidents, grouped notifications are proven, and prior upstream/Key behavior remains intact.
 
 ## Tasks
 
-### T-001 Settings and model data structures
+### T-201 Runtime settings model and APIs
 
 - State: `done`
-- Scope: `src/db.js`, `src/repository.js`, migration/repository tests.
-- Purpose: Persist encrypted PushPlus configuration, discovered group/model candidates, and selected per-group probe models without exposing secrets or breaking existing databases.
-- Pressure check: A migration can pass while losing existing settings or making model mappings stale. Use additive tables, unique constraints and replace-by-upstream transactions; prove upgrade compatibility and token masking.
-- Acceptance: Existing database opens unchanged; encrypted token round-trips only inside the repository; group model candidates and selections can be replaced/read deterministically.
-- Verification: Focused migration/repository tests and `node --check`.
-- Evidence: `node --test --test-concurrency=1 test/migration.test.js test/settingsRepository.test.js` passed 3/3; transition `implementing -> main_verify -> done`.
+- Scope: `src/config.js`, `src/repository.js`, a focused runtime-settings service if needed, `src/server.js`, migration/repository/API tests.
+- Purpose: Persist validated operational settings with current environment/default behavior as the compatibility fallback.
+- Pressure check: A settings API can appear correct while silently enabling schedulers that were hard-disabled in the environment or changing current production defaults. Store only safe runtime fields, preserve absence-as-current-behavior, and expose effective values plus environment locks.
+- Acceptance: Typed settings round-trip; invalid ranges are rejected; no boot secret is writable; missing settings reproduce current behavior; scheduler environment disables cannot be bypassed.
+- Verification: Focused migration, repository, and route/service tests plus syntax checks.
+- Evidence: Runtime/migration/repository tests passed 10/10. Settings use the encrypted `console_settings` store, merge partial updates against current defaults, reject unknown and out-of-range fields, and expose effective values with environment hard-disable locks. Syntax and diff checks passed.
 
-### T-002 PushPlus settings
-
-- State: `done`
-- Scope: PushPlus client, server routes/schemas, Settings UI, focused tests.
-- Purpose: Configure, clear and test PushPlus from the console with database-first and environment fallback behavior.
-- Pressure check: A settings form can appear saved while the notifier still reads startup configuration, or can leak the token in status JSON. Resolve the token at send time, return only mask/source, and verify save-test-clear through HTTP.
-- Acceptance: Full token never leaves the backend; saved token survives restart; test and clear have explicit results.
-- Evidence: Syntax checks passed; PushPlus/repository tests passed 7/7; transition `implementing -> main_verify -> done`. HTTP save/clear remains in T-007 end-to-end verification.
-
-### T-003 Model synchronization and group-aware probes
+### T-202 Dynamic schedulers and per-upstream policy
 
 - State: `done`
-- Scope: upstream/model services, connectivity resolver, server routes, upstream form/settings UI, focused tests.
-- Purpose: Discover models per group, retain usage/manual fallbacks, and let each Key use its group selection.
-- Pressure check: Treating a site-wide model list as proof of every group causes false Key failures. Discover per group, label fallback sources, preserve manual selections, and verify model resolution for different group IDs.
-- Acceptance: `/v1/models` success is used; 403 groups get recent-usage candidates; manual fallback remains; checks resolve the group mapping.
-- Evidence: Model/connectivity/repository tests passed 10/10 and syntax checks passed; transition `implementing -> main_verify -> done`. Real upstream sync remains in T-007.
+- Scope: scheduler loops, sync/Key due logic, upstream schema/repository/API, focused tests.
+- Purpose: Apply saved settings without restart while retaining site-level control over sync, probes, alerts, thresholds, and intervals.
+- Pressure check: Shortening an interval could immediately launch a costly full probe, and a static `setInterval` could ignore new settings. Saving must not directly execute work; a bounded dispatcher reads current settings and runs only due sites.
+- Acceptance: Runtime toggles and intervals apply on the next dispatcher pass; per-upstream overrides win; environment hard disables win; model sync remains manual.
+- Verification: Fake-clock scheduler tests and API persistence tests without external requests.
+- Evidence: Focused scheduler/migration/repository tests passed. A 10-second dispatcher reads current settings, prevents overlapping jobs, honors environment hard disables, and passes current concurrency, timeout, retention, and default intervals without executing work on save. Per-upstream sync, probe, notification, and low-balance switches persist independently.
 
-### T-004 Key management hierarchy and reliable mutations
-
-- State: `done`
-- Scope: Key routes/client, repository reconciliation, Key UI and focused tests.
-- Purpose: Default to collapsed upstream rows and ensure enable, pause and delete remain correct after refresh.
-- Pressure check: Awaiting a broad site sync can still resurrect deleted Keys if reconciliation reads stale or unrelated snapshots. Reconcile the complete live Key list synchronously after the mutation, return the reconciled state, and exercise refresh behavior with a stateful fake upstream.
-- Acceptance: Mutations await reconciliation; errors do not produce optimistic false states; delete requires confirmation.
-- Evidence: Key mutation/import/monitoring tests passed 8/8 and syntax checks passed; transition `implementing -> main_verify -> done`. Real destructive Key verification remains explicitly excluded.
-
-### T-005 Desktop navigation controls
+### T-203 Configurable PushPlus rules and grouping
 
 - State: `done`
-- Scope: `public/styles.css`, responsive browser checks.
-- Purpose: Hide sidebar close/menu controls on desktop while retaining mobile navigation.
-- Pressure check: A specificity fix can hide mobile navigation too. Use matching high-specificity desktop and media selectors, then verify computed display values at both breakpoints.
-- Acceptance: No unwanted desktop controls; mobile open/close remains usable.
-- Evidence: Headless Chrome computed both controls as `none` at 1440px and `flex` at 390px; transition `implementing -> main_verify -> done`.
+- Scope: alert service, connectivity batching, repository alert metadata, PushPlus status/rules APIs, focused tests.
+- Purpose: Keep per-Key incident history while sending calm, configurable WeChat notifications.
+- Pressure check: Grouping alerts by replacing per-Key records would lose diagnosis and make partial recovery ambiguous. Keep records per Key, gather newly due notifications after a site check, then send one grouped message when configured.
+- Acceptance: Event toggles affect delivery only; IP blocks can be muted; default delivery groups by upstream; thresholds, recovery, reminder interval, quiet hours, and notification master switch are honored; failures remain recorded.
+- Verification: Stateful fake-repository/fake-notifier tests for grouping, deduplication, reminders, quiet hours, and recovery.
+- Evidence: Alert/connectivity/runtime tests passed 22/22. Separate per-Key records produced one upstream-grouped delivery, muted IP blocks remained recorded, reminder eligibility respected elapsed time, quiet hours were testable, and the existing incident/recovery path remained compatible.
 
-### T-006 Upstream request usage
-
-- State: `done`
-- Scope: upstream usage adapter, sanitized routes, sidebar/view UI and focused tests.
-- Purpose: Show real paginated per-request records from one selected upstream without local mirroring.
-- Pressure check: A raw proxy could leak full Keys, account objects or unbounded query behavior. Whitelist request parameters and response fields, select one upstream at a time, and prove sanitization with deliberately hostile fixtures.
-- Acceptance: Filters, pagination and details work; full Keys, credentials and raw upstream objects are never returned.
-- Evidence: Usage/Key mutation tests passed 6/6; real upstream list returned 17,257 records and detail lookup succeeded with no forbidden fields or full-Key pattern; transition `implementing -> main_verify -> done`.
-
-### T-007 Whole-change verification and polish
+### T-204 Alert acknowledgement
 
 - State: `done`
-- Scope: tests, browser checks, documentation where configuration behavior changed.
-- Purpose: Prove cross-task workflows, responsive layout, security boundaries and real read-only integrations.
-- Pressure check: Individual APIs can pass while navigation never loads data, responsive filters overflow, or real upstream capability differs from fixtures. Exercise complete browser journeys, inspect console/network errors, and distinguish real read-only proof from unverified PushPlus delivery and destructive Key actions.
-- Acceptance: Full suite passes; desktop/mobile flows pass; real usage/model reads pass; server is left running on port 4317.
-- Evidence: `npm test` passed 29/29 and all JavaScript syntax checks passed. Real upstream usage list/detail returned sanitized records with local Key/group enrichment. Real model sync found 8 groups: 2 live, 4 usage fallback, 2 unavailable; stored errors contain no raw IP. Headless Chrome verified Key accordion, usage pagination/detail, eight model selectors, PushPlus form, desktop/mobile navigation, no page overflow, no console errors, and no failed HTTP responses. Transition `implementing -> main_verify -> done`.
+- Scope: alert migration/repository/API, alert service suppression rules, focused tests.
+- Purpose: Let operators mark incidents handled without pretending the upstream recovered.
+- Pressure check: Reusing `resolved` would create a new incident on the next failed check. Add acknowledgement metadata while leaving the incident open until a real recovery.
+- Acceptance: Single and bulk acknowledgement are idempotent; acknowledged incidents suppress incident retries/reminders; recovery still resolves them; a later post-recovery failure creates a new incident.
+- Verification: Repository/API lifecycle tests.
+- Evidence: Alert lifecycle tests passed. Single and bulk acknowledgement are idempotent, acknowledged incidents remain open while suppressing repeat delivery, recovery resolves the original incident, and a later failure opens a new incident.
+
+### T-205 Settings and Alerts UI
+
+- State: `done`
+- Scope: `public/index.html`, `public/app.js`, `public/styles.css`.
+- Purpose: Centralize safe operational controls and make alert handling efficient.
+- Pressure check: A large settings surface can become unreadable or allow accidental expensive changes. Use tabs, explicit units/ranges, environment-lock feedback, and confirmations for enabling or shortening paid probes.
+- Acceptance: Notification Rules, Automatic Tasks, Upstream Policies, and Retention tabs work; current values load; saves show authoritative results; Alerts supports Pending, Handled, Recovered plus single/bulk handling; desktop/mobile layout remains coherent.
+- Verification: Browser interactions at desktop and 390x844, console/network inspection, and API round trips.
+- Evidence: Browser verification passed against the real upstream at the existing desktop/mid-size viewport and Chrome's explicit 390x844 viewport. All four settings tabs rendered, the upstream policy row saved successfully, isolated fixture alerts proved single and filtered bulk acknowledgement, and temporary fixtures were deleted. A stale bulk-button state found during testing was fixed and retested; mobile root/content widths stayed within the viewport while wide tables scrolled inside their own containers.
+
+### T-206 Documentation and compatibility polish
+
+- State: `done`
+- Scope: relevant README/deployment documentation and whole-diff cleanup.
+- Purpose: Explain precedence, costs, acknowledgement semantics, and restart behavior accurately.
+- Acceptance: Documentation distinguishes environment locks, runtime controls, per-upstream overrides, paid probes, manual model sync, handled incidents, and real recovery.
+- Verification: Documentation/diff review and stale-copy search.
+- Evidence: README, deployment guidance, and `.env.example` now document scheduler hard locks, hot database settings, per-upstream precedence, paid probes, manual model-catalog sync, and handled-versus-recovered semantics. Legacy notification counts are normalized during migration, covered by a focused migration fixture. Focused tests passed 16/16; syntax and diff checks passed.
+
+### T-207 Whole-change verification and delivery
+
+- State: `done`
+- Scope: full test suite, syntax/security scans, browser verification, one real PushPlus test, final process.
+- Purpose: Prove the settings-to-runtime and alert lifecycle end to end and leave an inspectable server.
+- Pressure check: Unit tests could pass while the running process still caches old settings or the UI saves a different schema. Exercise the live server without running a full paid probe batch, then restore the user's saved settings.
+- Acceptance: Full suite passes; no secret leaks; live save/read/restore works without restart; acknowledgement is visible; one labeled PushPlus test is sent; server is left running on port 4317 with the user's effective settings.
+- Evidence: Full suite passed 48/48, all JavaScript syntax checks and `git diff --check` passed, and `npm audit --omit=dev` reports 0 vulnerabilities after updating the patched transitive `body-parser`. API scans confirmed all operational routes remain behind `/api` authentication and no real secrets were added to the diff. One labeled `Sub2API 控制台测试` PushPlus message returned code 200. Runtime test settings and fixture alerts were removed. The final plain `.env` server reports default-source settings with no environment locks; desktop/mid-size and Chrome 390x844 browser checks show no page-level overflow or console warnings/errors.
 
 ## Completion
 
 - State: `complete`
-- Server: `http://localhost:4317` in exec session `84479`.
-- Real-world gaps: PushPlus delivery awaits a real token and user confirmation in WeChat. Destructive real-Key delete was not exercised; stateful fake-upstream tests cover enable, pause, delete and failed mutations.

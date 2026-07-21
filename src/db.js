@@ -22,8 +22,12 @@ CREATE TABLE IF NOT EXISTS upstream_sites (
   codex_aliases TEXT NOT NULL DEFAULT '["codex"]',
   low_balance_threshold REAL NOT NULL DEFAULT 10,
   rate_change_threshold_percent REAL NOT NULL DEFAULT 20,
+  sync_enabled INTEGER NOT NULL DEFAULT 1,
   sync_interval_seconds INTEGER NOT NULL DEFAULT 180,
+  key_check_enabled INTEGER NOT NULL DEFAULT 1,
   key_check_interval_seconds INTEGER NOT NULL DEFAULT 300,
+  alert_notifications_enabled INTEGER NOT NULL DEFAULT 1,
+  low_balance_alert_enabled INTEGER NOT NULL DEFAULT 1,
   openai_probe_model TEXT NOT NULL DEFAULT '',
   anthropic_probe_model TEXT NOT NULL DEFAULT '',
   last_sync_at TEXT,
@@ -257,6 +261,16 @@ CREATE TABLE IF NOT EXISTS upstream_api_key_snapshots (
 CREATE INDEX IF NOT EXISTS idx_upstream_api_key_snapshots_site ON upstream_api_key_snapshots(upstream_site_id, captured_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_upstream_api_key_snapshots_unique ON upstream_api_key_snapshots(upstream_site_id, upstream_key_id);
 
+CREATE TABLE IF NOT EXISTS upstream_api_key_secrets (
+  upstream_site_id INTEGER NOT NULL,
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  encrypted_key TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (upstream_site_id, upstream_key_id),
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS upstream_key_create_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   upstream_site_id INTEGER NOT NULL,
@@ -320,6 +334,15 @@ CREATE TABLE IF NOT EXISTS upstream_probe_model_catalog (
 CREATE INDEX IF NOT EXISTS idx_probe_model_catalog_site_group
   ON upstream_probe_model_catalog(upstream_site_id, group_id);
 
+CREATE TABLE IF NOT EXISTS upstream_key_probe_settings (
+  upstream_site_id INTEGER NOT NULL,
+  upstream_key_id TEXT NOT NULL DEFAULT '',
+  selected_model TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (upstream_site_id, upstream_key_id),
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS upstream_key_connectivity_checks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   upstream_site_id INTEGER NOT NULL,
@@ -328,6 +351,7 @@ CREATE TABLE IF NOT EXISTS upstream_key_connectivity_checks (
   probe_level TEXT NOT NULL DEFAULT 'inference',
   platform TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
+  endpoint TEXT NOT NULL DEFAULT '',
   latency_ms INTEGER,
   http_status INTEGER,
   error_code TEXT NOT NULL DEFAULT '',
@@ -346,6 +370,7 @@ CREATE TABLE IF NOT EXISTS upstream_key_connectivity_state (
   probe_level TEXT NOT NULL DEFAULT 'inference',
   platform TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
+  endpoint TEXT NOT NULL DEFAULT '',
   latency_ms INTEGER,
   http_status INTEGER,
   error_code TEXT NOT NULL DEFAULT '',
@@ -373,6 +398,9 @@ CREATE TABLE IF NOT EXISTS alert_events (
   opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   notified_at TEXT,
+  last_notified_at TEXT,
+  notification_count INTEGER NOT NULL DEFAULT 0,
+  acknowledged_at TEXT,
   resolved_at TEXT,
   recovery_notified_at TEXT,
   FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
@@ -460,7 +488,11 @@ ensureColumn('upstream_sites', 'codex_aliases', `TEXT NOT NULL DEFAULT '["codex"
 ensureColumn('upstream_sites', 'upstream_type', `TEXT NOT NULL DEFAULT 'auto'`);
 ensureColumn('upstream_sites', 'low_balance_threshold', 'REAL NOT NULL DEFAULT 10');
 ensureColumn('upstream_sites', 'rate_change_threshold_percent', 'REAL NOT NULL DEFAULT 20');
+ensureColumn('upstream_sites', 'sync_enabled', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('upstream_sites', 'key_check_interval_seconds', 'INTEGER NOT NULL DEFAULT 300');
+ensureColumn('upstream_sites', 'key_check_enabled', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('upstream_sites', 'alert_notifications_enabled', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('upstream_sites', 'low_balance_alert_enabled', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('upstream_sites', 'openai_probe_model', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('upstream_sites', 'anthropic_probe_model', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('upstream_sites', 'last_key_import_at', 'TEXT');
@@ -516,6 +548,17 @@ ensureColumn('upstream_api_key_snapshots', 'first_seen_at', 'TEXT');
 ensureColumn('upstream_api_key_snapshots', 'last_seen_at', 'TEXT');
 ensureColumn('upstream_api_key_snapshots', 'missing_since', 'TEXT');
 ensureColumn('upstream_api_key_snapshots', 'import_state', `TEXT NOT NULL DEFAULT 'present'`);
+ensureColumn('upstream_key_connectivity_checks', 'endpoint', `TEXT NOT NULL DEFAULT ''`);
+ensureColumn('upstream_key_connectivity_state', 'endpoint', `TEXT NOT NULL DEFAULT ''`);
+ensureColumn('alert_events', 'last_notified_at', 'TEXT');
+ensureColumn('alert_events', 'notification_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('alert_events', 'acknowledged_at', 'TEXT');
 ensureColumn('own_site_route_snapshots', 'upstream_buy_rate', 'REAL');
+
+db.prepare(`
+  UPDATE alert_events
+  SET notification_count = 1
+  WHERE notified_at IS NOT NULL AND notification_count = 0
+`).run();
 
 module.exports = db;

@@ -1,9 +1,16 @@
 const { requestJson, getUpstreamToken } = require('./upstreamClient');
 
+const USER_UI_HEADERS = { 'X-User-UI-Request': '1' };
+
 function maskApiKey(key) {
   if (!key) return '';
   if (key.length <= 12) return '******';
   return `${key.slice(0, 7)}...${key.slice(-4)}`;
+}
+
+function isCompleteApiKey(value) {
+  const key = String(value || '').trim();
+  return key.length > 12 && !key.includes('...') && !key.includes('…') && !key.includes('*');
 }
 
 function unwrapPaginated(data) {
@@ -71,7 +78,8 @@ function normalizeSub2APIKey(raw, siteMeta = {}, groupLookup = null) {
     primitiveGroup
   );
   const groupMeta = findGroupMeta(groupLookup, groupId, raw, group);
-  const key = raw?.key || '';
+  const key = String(firstPresent(raw?.key, raw?.key_masked) || '').trim();
+  const completeKey = isCompleteApiKey(key) ? key : '';
   const groupRate = firstNumber(
     raw?.group_rate,
     raw?.groupRate,
@@ -92,8 +100,8 @@ function normalizeSub2APIKey(raw, siteMeta = {}, groupLookup = null) {
     base_url: siteMeta.baseUrl || '',
     id: raw?.id ?? null,
     name: raw?.name || '',
-    key_masked: maskApiKey(key),
-    key_full: key || null,
+    key_masked: completeKey ? maskApiKey(completeKey) : key,
+    key_full: completeKey || null,
     group_id: groupId ?? null,
     group_name: firstPresent(group.name, group.group_name, raw?.group_name, raw?.groupName, groupMeta.name) || '',
     platform: firstPresent(group.platform, raw?.group_platform, raw?.groupPlatform, raw?.platform, groupMeta.platform) || '',
@@ -175,7 +183,8 @@ async function listSub2APIKeys(site, creds, { page = 1, pageSize = 100, search =
     const [data, groupLookup] = await Promise.all([
       requestJson(site.base_url, `/keys?${params.toString()}`, {
         token: auth.token,
-        prefix: auth.prefix
+        prefix: auth.prefix,
+        headers: USER_UI_HEADERS
       }),
       fetchSub2APIGroupLookup(site, auth)
     ]);
@@ -216,7 +225,8 @@ async function createSub2APIKey(site, creds, payload) {
         method: 'POST',
         body,
         token: auth.token,
-        prefix: auth.prefix
+        prefix: auth.prefix,
+        headers: USER_UI_HEADERS
       }),
       fetchSub2APIGroupLookup(site, auth)
     ]);
@@ -235,7 +245,8 @@ async function updateSub2APIKey(site, creds, keyId, payload) {
         method: 'PUT',
         body,
         token: auth.token,
-        prefix: auth.prefix
+        prefix: auth.prefix,
+        headers: USER_UI_HEADERS
       }),
       fetchSub2APIGroupLookup(site, auth)
     ]);
@@ -248,7 +259,8 @@ async function deleteSub2APIKey(site, creds, keyId) {
     await requestJson(site.base_url, `/keys/${keyId}`, {
       method: 'DELETE',
       token: auth.token,
-      prefix: auth.prefix
+      prefix: auth.prefix,
+      headers: USER_UI_HEADERS
     });
     return { deleted: true, id: keyId };
   });
@@ -256,6 +268,7 @@ async function deleteSub2APIKey(site, creds, keyId) {
 
 module.exports = {
   maskApiKey,
+  isCompleteApiKey,
   normalizeSub2APIKey,
   normalizeSub2APIGroup,
   assertKeyManagementSupported,

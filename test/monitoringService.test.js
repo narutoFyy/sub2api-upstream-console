@@ -23,7 +23,8 @@ test('monitoring aggregation counts balance, active Keys and failures', () => {
       { upstream_key_id: '1', import_state: 'present', connectivity_status: 'connected' },
       { upstream_key_id: '2', import_state: 'present', connectivity_status: 'timeout' },
       { upstream_key_id: '3', import_state: 'missing', connectivity_status: 'auth_failed' }
-    ]
+    ],
+    listUpstreamProbeModels: () => [{ group_id: '9', models: [{ model: 'gpt-monitor' }] }]
   };
   const result = buildUpstreamMonitoring(repository, Date.parse('2026-01-01T01:00:00.000Z'));
   assert.deepEqual(result.totals, {

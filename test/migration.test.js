@@ -49,9 +49,27 @@ legacy.exec(`
     last_used_at TEXT,
     captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE alert_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'warning',
+    status TEXT NOT NULL DEFAULT 'open',
+    upstream_site_id INTEGER,
+    upstream_key_id TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    notified_at TEXT,
+    resolved_at TEXT,
+    recovery_notified_at TEXT
+  );
   INSERT INTO upstream_sites (name, base_url) VALUES ('Legacy API', 'https://legacy.example');
   INSERT INTO upstream_api_key_snapshots (upstream_site_id, upstream_key_id, name, key_masked)
     VALUES (1, '7', 'Legacy Key', 'sk-...old');
+  INSERT INTO alert_events (fingerprint, event_type, notified_at)
+    VALUES ('legacy-notified', 'key_connectivity', '2026-01-01T00:00:00.000Z');
 `);
 legacy.close();
 
@@ -60,6 +78,10 @@ test('legacy database migrates in place without losing rows', () => {
   const siteColumns = db.prepare('PRAGMA table_info(upstream_sites)').all().map((item) => item.name);
   const keyColumns = db.prepare('PRAGMA table_info(upstream_api_key_snapshots)').all().map((item) => item.name);
   assert.ok(siteColumns.includes('key_check_interval_seconds'));
+  assert.ok(siteColumns.includes('sync_enabled'));
+  assert.ok(siteColumns.includes('key_check_enabled'));
+  assert.ok(siteColumns.includes('alert_notifications_enabled'));
+  assert.ok(siteColumns.includes('low_balance_alert_enabled'));
   assert.ok(siteColumns.includes('openai_probe_model'));
   assert.ok(keyColumns.includes('import_state'));
   assert.equal(db.prepare('SELECT name FROM upstream_sites WHERE id=1').get().name, 'Legacy API');
@@ -68,6 +90,15 @@ test('legacy database migrates in place without losing rows', () => {
   assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='console_settings'").get());
   assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_group_probe_settings'").get());
   assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_probe_model_catalog'").get());
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_api_key_secrets'").get());
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_key_probe_settings'").get());
+  assert.ok(db.prepare('PRAGMA table_info(upstream_key_connectivity_checks)').all().some((item) => item.name === 'endpoint'));
+  assert.ok(db.prepare('PRAGMA table_info(upstream_key_connectivity_state)').all().some((item) => item.name === 'endpoint'));
+  const alertColumns = db.prepare('PRAGMA table_info(alert_events)').all().map((item) => item.name);
+  assert.ok(alertColumns.includes('last_notified_at'));
+  assert.ok(alertColumns.includes('notification_count'));
+  assert.ok(alertColumns.includes('acknowledged_at'));
+  assert.equal(db.prepare('SELECT notification_count FROM alert_events WHERE fingerprint=?').get('legacy-notified').notification_count, 1);
   db.close();
 });
 

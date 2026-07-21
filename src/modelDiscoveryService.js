@@ -134,8 +134,11 @@ async function syncUpstreamModels(siteId, dependencies = {}) {
       token: credentials.token
     })
   ]);
+  const keys = repository.attachKeySecrets
+    ? repository.attachKeySecrets(siteId, keyResult.items || [])
+    : (keyResult.items || []);
   const representative = new Map();
-  for (const key of keyResult.items || []) {
+  for (const key of keys) {
     const groupId = String(key.group_id ?? '');
     if (!representative.has(groupId) && key.key_full && String(key.status || '').toLowerCase() === 'active') {
       representative.set(groupId, key);
@@ -164,6 +167,7 @@ async function syncUpstreamModels(siteId, dependencies = {}) {
     groups: items.length,
     live_groups: items.filter((item) => item.discovery_status === 'live').length,
     fallback_groups: items.filter((item) => item.discovery_status === 'usage').length,
+    stale_groups: items.filter((item) => item.discovery_status === 'stale').length,
     unavailable_groups: items.filter((item) => item.discovery_status === 'unavailable').length,
     items
   };
