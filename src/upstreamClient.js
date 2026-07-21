@@ -14,6 +14,7 @@ class UpstreamHTTPError extends Error {
 const API_PREFIXES = ['/api/v1', '/api'];
 const MAX_UPSTREAM_ERROR_LENGTH = 480;
 const DISCOVERY_TIMEOUT_MS = 10000;
+const LOGIN_TIMEOUT_MS = 30000;
 
 function joinUrl(baseUrl, path, prefix = '/api/v1') {
   return `${baseUrl.replace(/\/$/, '')}${prefix}${path.startsWith('/') ? path : `/${path}`}`;
@@ -186,25 +187,33 @@ async function loginWithPassword(baseUrl, email, password) {
   const attempts = [];
   for (const prefix of API_PREFIXES) {
     for (const path of ['/auth/login', '/login']) {
-      try {
-        const data = await requestJson(baseUrl, path, {
-          method: 'POST',
-          body: { email, password },
-          prefix
-        });
-        const token = data?.access_token || data?.token || data?.jwt;
-        if (!token) {
-          throw new Error('Login succeeded but no access token was returned');
+      let lastError = null;
+      const maxAttempts = prefix === '/api/v1' && path === '/auth/login' ? 2 : 1;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          const data = await requestJson(baseUrl, path, {
+            method: 'POST',
+            body: { email, password },
+            prefix,
+            timeoutMs: LOGIN_TIMEOUT_MS
+          });
+          const token = data?.access_token || data?.token || data?.jwt;
+          if (!token) {
+            throw new Error('Login succeeded but no access token was returned');
+          }
+          return {
+            token,
+            prefix,
+            login_path: path,
+            raw: data
+          };
+        } catch (err) {
+          lastError = err;
+          const retryableTimeout = /timeout|aborted/i.test(String(err.message));
+          if (!retryableTimeout) break;
         }
-        return {
-          token,
-          prefix,
-          login_path: path,
-          raw: data
-        };
-      } catch (err) {
-        attempts.push(`${prefix}${path}: ${sanitizeUpstreamText(err.message, 180)}`);
       }
+      attempts.push(`${prefix}${path}: ${sanitizeUpstreamText(lastError?.message, 180)}`);
     }
   }
   throw new Error(sanitizeUpstreamText(`Login failed on known Sub2API paths: ${attempts.join('; ')}`, 720));
