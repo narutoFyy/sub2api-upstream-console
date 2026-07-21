@@ -12,6 +12,8 @@ class UpstreamHTTPError extends Error {
 }
 
 const API_PREFIXES = ['/api/v1', '/api'];
+const MAX_UPSTREAM_ERROR_LENGTH = 480;
+const DISCOVERY_TIMEOUT_MS = 10000;
 
 function joinUrl(baseUrl, path, prefix = '/api/v1') {
   return `${baseUrl.replace(/\/$/, '')}${prefix}${path.startsWith('/') ? path : `/${path}`}`;
@@ -24,17 +26,108 @@ function unwrapSub2API(payload) {
   return payload;
 }
 
+function sanitizeUpstreamText(value, maxLength = MAX_UPSTREAM_ERROR_LENGTH) {
+  let text = String(value ?? '');
+  const title = text.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  if (/<(?:!doctype|html|head|body|script|style)\b/i.test(text)) {
+    text = title || 'HTML error page';
+  }
+  text = text
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(?:39|x27);/gi, "'")
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(password|passwd|token|api[_-]?key|authorization)\s*[:=]\s*[^\s,;|]+/gi, '$1=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…` : text;
+}
+
 function upstreamErrorMessage(path, status, payload) {
   const body = payload && typeof payload === 'object' ? payload : {};
-  const message = body.message || body.error || body.reason || body.raw || '';
-  const code = body.code || body.error_code || body.reason || '';
+  const message = sanitizeUpstreamText(body.message || body.error?.message || body.error || body.reason || body.raw || '', 260);
+  const code = sanitizeUpstreamText(body.code || body.error_code || body.reason || '', 80);
   const metadata = body.metadata && typeof body.metadata === 'object'
-    ? Object.entries(body.metadata).map(([key, value]) => `${key}=${value}`).join(', ')
+    ? sanitizeUpstreamText(Object.entries(body.metadata).map(([key, value]) => `${key}=${value}`).join(', '), 140)
     : '';
   const detail = [code, message, metadata].filter(Boolean).join(' | ');
-  return detail
+  return sanitizeUpstreamText(detail
     ? `Upstream ${path} returned ${status}: ${detail}`
-    : `Upstream ${path} returned ${status}`;
+    : `Upstream ${path} returned ${status}`, MAX_UPSTREAM_ERROR_LENGTH);
+}
+
+async function assertPublicUpstreamUrl(value) {
+  const url = assertSafeUpstreamUrl(value);
+  const addresses = await dns.lookup(url.hostname, { all: true }).catch(() => []);
+  if (addresses.some((item) => isPrivateHostname(item.address))) {
+    throw new Error('Base URL resolved to a private network address');
+  }
+  return url;
+}
+
+function sameSiteHostname(left, right) {
+  const a = String(left || '').toLowerCase();
+  const b = String(right || '').toLowerCase();
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+function extractDiscoveredBaseUrl(html, pageUrl, originalUrl) {
+  const original = assertSafeUpstreamUrl(originalUrl);
+  const page = assertSafeUpstreamUrl(pageUrl || originalUrl);
+  const text = String(html || '');
+  const configuredMatch = text.match(/"api_base_url"\s*:\s*("(?:\\.|[^"\\])*")/i);
+  if (configuredMatch) {
+    try {
+      const configured = new URL(JSON.parse(configuredMatch[1]), page);
+      if (sameSiteHostname(configured.hostname, original.hostname)) return configured.origin;
+    } catch {
+      // Ignore malformed public configuration and continue with other signals.
+    }
+  }
+  if (page.hostname !== original.hostname && sameSiteHostname(page.hostname, original.hostname)) {
+    return page.origin;
+  }
+  const hrefPattern = /href\s*=\s*["']([^"']+)["']/gi;
+  for (const match of text.matchAll(hrefPattern)) {
+    try {
+      const candidate = new URL(match[1], page);
+      if (!sameSiteHostname(candidate.hostname, original.hostname)) continue;
+      if (/^(api|sub2)(?:\.|$)/i.test(candidate.hostname)) return candidate.origin;
+    } catch {
+      // Ignore invalid links in the public landing page.
+    }
+  }
+  return original.origin;
+}
+
+async function discoverUpstreamBaseUrl(baseUrl) {
+  const original = await assertPublicUpstreamUrl(baseUrl);
+  let current = new URL('/', original);
+  for (let redirects = 0; redirects <= 4; redirects += 1) {
+    const response = await fetch(current, {
+      method: 'GET',
+      headers: { accept: 'text/html,application/xhtml+xml' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)
+    });
+    if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
+      current = await assertPublicUpstreamUrl(new URL(response.headers.get('location'), current));
+      continue;
+    }
+    const html = (await response.text()).slice(0, 1024 * 1024);
+    const discovered = extractDiscoveredBaseUrl(html, current, original);
+    await assertPublicUpstreamUrl(discovered);
+    return discovered;
+  }
+  return original.origin;
 }
 function extractCookie(headers) {
   if (!headers || typeof headers.get !== 'function') return '';
@@ -52,11 +145,7 @@ function defaultPaymentReturnUrl(baseUrl) {
 }
 
 async function requestJson(baseUrl, path, options = {}) {
-  const upstreamUrl = assertSafeUpstreamUrl(baseUrl);
-  const addresses = await dns.lookup(upstreamUrl.hostname, { all: true }).catch(() => []);
-  if (addresses.some((item) => isPrivateHostname(item.address))) {
-    throw new Error('Base URL resolved to a private network address');
-  }
+  await assertPublicUpstreamUrl(baseUrl);
   const headers = {
     accept: 'application/json',
     ...(options.body ? { 'content-type': 'application/json' } : {}),
@@ -75,7 +164,7 @@ async function requestJson(baseUrl, path, options = {}) {
   try {
     payload = text ? JSON.parse(text) : null;
   } catch {
-    payload = { raw: text };
+    payload = { raw: sanitizeUpstreamText(text) };
   }
   if (!res.ok) {
     throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
@@ -114,11 +203,11 @@ async function loginWithPassword(baseUrl, email, password) {
           raw: data
         };
       } catch (err) {
-        attempts.push(`${prefix}${path}: ${err.message}`);
+        attempts.push(`${prefix}${path}: ${sanitizeUpstreamText(err.message, 180)}`);
       }
     }
   }
-  throw new Error(`Login failed on known Sub2API paths: ${attempts.join('; ')}`);
+  throw new Error(sanitizeUpstreamText(`Login failed on known Sub2API paths: ${attempts.join('; ')}`, 720));
 }
 
 async function loginWithNewAPI(baseUrl, email, password) {
@@ -781,20 +870,27 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token }) 
 }
 
 async function fetchSub2APIState(input) {
+  let effectiveBaseUrl = input.baseUrl;
+  try {
+    effectiveBaseUrl = await discoverUpstreamBaseUrl(input.baseUrl);
+  } catch (error) {
+    throw new Error(`Unable to discover upstream API endpoint: ${sanitizeUpstreamText(error.message, 300)}`);
+  }
+  const effectiveInput = { ...input, baseUrl: effectiveBaseUrl };
   const upstreamType = input.upstreamType || input.upstream_type || 'auto';
   if (upstreamType === 'sub2api') {
-    return fetchSub2APICompatibleState(input);
+    return fetchSub2APICompatibleState(effectiveInput);
   }
   if (upstreamType === 'new-api' || upstreamType === 'newapi') {
-    return fetchNewAPIState(input);
+    return fetchNewAPIState(effectiveInput);
   }
   try {
-    return await fetchSub2APICompatibleState(input);
+    return await fetchSub2APICompatibleState(effectiveInput);
   } catch (sub2apiError) {
     try {
-      return await fetchNewAPIState(input);
+      return await fetchNewAPIState(effectiveInput);
     } catch (newAPIError) {
-      throw new Error(`Sync failed. Sub2API: ${sub2apiError.message}; New API: ${newAPIError.message}`);
+      throw new Error(sanitizeUpstreamText(`Sync failed. Sub2API: ${sub2apiError.message}; New API: ${newAPIError.message}`, 960));
     }
   }
 }
@@ -864,6 +960,10 @@ module.exports = {
   normalizeRates,
   loginWithPassword,
   requestJson,
+  sanitizeUpstreamText,
+  upstreamErrorMessage,
+  extractDiscoveredBaseUrl,
+  discoverUpstreamBaseUrl,
   createPaymentOrder,
   getPaymentOrder,
   getUpstreamToken

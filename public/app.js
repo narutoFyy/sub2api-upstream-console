@@ -45,6 +45,21 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function syncErrorPresentation(value) {
+  const clean = String(value ?? '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 600);
+  return {
+    full: clean,
+    summary: clean.length > 120 ? `${clean.slice(0, 119).trimEnd()}…` : clean
+  };
+}
+
 function refreshIcons() {
   if (window.lucide?.createIcons) window.lucide.createIcons({ attrs: { 'aria-hidden': 'true' } });
 }
@@ -233,6 +248,7 @@ function renderMonitoring() {
     const expanded = state.expandedSites.has(Number(site.id));
     const health = siteHealth(site);
     const balanceClass = isLowBalance(site) ? 'low' : '';
+    const syncError = syncErrorPresentation(site.last_sync_error);
     return `
       <tr class="data-row">
         <td><div class="upstream-name-cell"><button class="row-chevron ${expanded ? 'expanded' : ''}" type="button" data-toggle-site="${site.id}" aria-label="展开 ${escapeHtml(site.name)}"><i data-lucide="chevron-right"></i></button><div class="upstream-identity"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></div></td>
@@ -240,7 +256,7 @@ function renderMonitoring() {
         <td><span class="status-label"><span class="status-dot ${health.dot}"></span><span>${escapeHtml(health.label)}</span></span></td>
         <td><span class="numeric">${site.key_count || 0} 个 Key</span></td>
         <td class="numeric ${site.key_abnormal_count ? 'danger-text' : ''}">${site.key_abnormal_count || 0}</td>
-        <td><div class="cell-stack"><span>${timeText(site.last_sync_at)}</span>${site.last_sync_error ? `<small class="danger-text">${escapeHtml(site.last_sync_error)}</small>` : ''}</div></td>
+        <td><div class="cell-stack sync-cell"><span>${timeText(site.last_sync_at)}</span>${syncError.full ? `<small class="danger-text sync-error" title="${escapeHtml(syncError.full)}">${escapeHtml(syncError.summary)}</small>` : ''}</div></td>
         <td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-sync-site="${site.id}" title="同步"><i data-lucide="refresh-cw"></i></button><button class="icon-btn" type="button" data-detail-site="${site.id}" title="详情"><i data-lucide="ellipsis-vertical"></i></button></div></td>
       </tr>
       ${expanded ? renderExpandedKeys(site) : ''}

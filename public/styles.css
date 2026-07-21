@@ -277,6 +277,7 @@ svg { display: block; }
 .data-table tbody > tr.data-row:hover > td { background: var(--surface-hover); }
 .data-table .align-right { text-align: right; }
 
+.upstream-table { min-width: 980px; table-layout: fixed; }
 .upstream-table > thead th:first-child { width: 25%; }
 .upstream-table > thead th:nth-child(2) { width: 15%; }
 .upstream-table > thead th:nth-child(3) { width: 14%; }
@@ -291,6 +292,9 @@ svg { display: block; }
 .upstream-identity { min-width: 0; }
 .upstream-identity strong { display: block; font-size: 15px; font-weight: 720; }
 .upstream-identity small, .cell-stack small { display: block; margin-top: 4px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-stack { min-width: 0; max-width: 100%; }
+.sync-cell { width: 100%; }
+.sync-error { max-width: 100%; cursor: help; }
 
 .balance-value { display: block; font-size: 24px; line-height: 1; font-weight: 780; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .balance-value.low { color: var(--danger); }
