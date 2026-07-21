@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS upstream_credentials (
   encrypted_email TEXT NOT NULL DEFAULT '',
   encrypted_password TEXT NOT NULL DEFAULT '',
   encrypted_token TEXT NOT NULL DEFAULT '',
+  encrypted_refresh_token TEXT NOT NULL DEFAULT '',
   token_expires_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -499,6 +500,7 @@ ensureColumn('upstream_sites', 'last_key_import_at', 'TEXT');
 ensureColumn('upstream_sites', 'last_key_check_at', 'TEXT');
 ensureColumn('upstream_sites', 'sync_failure_count', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_sites', 'sync_success_count', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('upstream_credentials', 'encrypted_refresh_token', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('upstream_current_snapshots', 'week_requests', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'week_tokens', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_current_snapshots', 'week_cost', 'REAL NOT NULL DEFAULT 0');

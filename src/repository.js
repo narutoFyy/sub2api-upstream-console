@@ -113,6 +113,7 @@ function getCredentials(siteId) {
     email: decryptSecret(row.encrypted_email),
     password: decryptSecret(row.encrypted_password),
     token: decryptSecret(row.encrypted_token),
+    refresh_token: decryptSecret(row.encrypted_refresh_token),
     token_expires_at: row.token_expires_at
   };
 }
@@ -123,7 +124,8 @@ function getMaskedCredentials(siteId) {
   return {
     email: creds.email,
     password_masked: maskSecret(creds.password),
-    token_masked: maskSecret(creds.token)
+    token_masked: maskSecret(creds.token),
+    refresh_token_masked: maskSecret(creds.refresh_token)
   };
 }
 
@@ -165,9 +167,21 @@ function createSite(input) {
       now
     });
     db.prepare(`
-      INSERT INTO upstream_credentials (upstream_site_id, encrypted_email, encrypted_password, encrypted_token, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(result.lastInsertRowid, encryptSecret(input.email || ''), encryptSecret(input.password || ''), encryptSecret(input.token || ''), now, now);
+      INSERT INTO upstream_credentials (
+        upstream_site_id, encrypted_email, encrypted_password, encrypted_token,
+        encrypted_refresh_token, token_expires_at, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      result.lastInsertRowid,
+      encryptSecret(input.email || ''),
+      encryptSecret(input.password || ''),
+      encryptSecret(input.token || ''),
+      encryptSecret(input.refresh_token || ''),
+      input.token_expires_at || null,
+      now,
+      now
+    );
     return getSite(result.lastInsertRowid);
   });
   return tx();
@@ -221,18 +235,25 @@ function updateSite(id, input) {
     `).run(next);
     const currentCreds = getCredentials(id) || {};
     db.prepare(`
-      INSERT INTO upstream_credentials (upstream_site_id, encrypted_email, encrypted_password, encrypted_token, created_at, updated_at)
-      VALUES (@id, @email, @password, @token, @now, @now)
+      INSERT INTO upstream_credentials (
+        upstream_site_id, encrypted_email, encrypted_password, encrypted_token,
+        encrypted_refresh_token, token_expires_at, created_at, updated_at
+      )
+      VALUES (@id, @email, @password, @token, @refresh_token, @token_expires_at, @now, @now)
       ON CONFLICT(upstream_site_id) DO UPDATE SET
         encrypted_email=@email,
         encrypted_password=@password,
         encrypted_token=@token,
+        encrypted_refresh_token=@refresh_token,
+        token_expires_at=@token_expires_at,
         updated_at=@now
     `).run({
       id,
       email: encryptSecret(input.email ?? currentCreds.email ?? ''),
       password: encryptSecret(input.password ?? currentCreds.password ?? ''),
       token: encryptSecret(input.token ?? currentCreds.token ?? ''),
+      refresh_token: encryptSecret(input.refresh_token ?? currentCreds.refresh_token ?? ''),
+      token_expires_at: input.token_expires_at ?? currentCreds.token_expires_at ?? null,
       now
     });
     return getSite(id);
@@ -491,6 +512,22 @@ function getMaskedOwnSiteCredentials(id) {
     password_masked: maskSecret(creds.password),
     token_masked: maskSecret(creds.token)
   };
+}
+
+function saveCredentialTokens(siteId, { token, refresh_token, token_expires_at }) {
+  const current = getCredentials(siteId);
+  if (!current) return false;
+  return db.prepare(`
+    UPDATE upstream_credentials
+    SET encrypted_token = ?, encrypted_refresh_token = ?, token_expires_at = ?, updated_at = ?
+    WHERE upstream_site_id = ?
+  `).run(
+    encryptSecret(token || current.token || ''),
+    encryptSecret(refresh_token || current.refresh_token || ''),
+    token_expires_at || current.token_expires_at || null,
+    nowIso(),
+    siteId
+  ).changes > 0;
 }
 
 function createOwnSite(input) {
@@ -1836,6 +1873,7 @@ module.exports = {
   getSite,
   getCredentials,
   getMaskedCredentials,
+  saveCredentialTokens,
   getSecretSetting,
   getMaskedSecretSetting,
   setSecretSetting,

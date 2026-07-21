@@ -15,6 +15,7 @@ const API_PREFIXES = ['/api/v1', '/api'];
 const MAX_UPSTREAM_ERROR_LENGTH = 480;
 const DISCOVERY_TIMEOUT_MS = 10000;
 const LOGIN_TIMEOUT_MS = 30000;
+const TOKEN_REFRESH_LEEWAY_MS = 5 * 60 * 1000;
 
 function joinUrl(baseUrl, path, prefix = '/api/v1') {
   return `${baseUrl.replace(/\/$/, '')}${prefix}${path.startsWith('/') ? path : `/${path}`}`;
@@ -183,6 +184,41 @@ async function requestJson(baseUrl, path, options = {}) {
   return data;
 }
 
+function tokenExpiryIso(token, expiresInSeconds, now = Date.now()) {
+  const expiresIn = Number(expiresInSeconds);
+  if (Number.isFinite(expiresIn) && expiresIn > 0) {
+    return new Date(now + expiresIn * 1000).toISOString();
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'));
+    return Number.isFinite(Number(payload.exp)) ? new Date(Number(payload.exp) * 1000).toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function tokenNeedsRefresh(token, tokenExpiresAt, now = Date.now()) {
+  if (!token) return true;
+  const expiry = Date.parse(tokenExpiresAt || tokenExpiryIso(token) || '');
+  return Number.isFinite(expiry) && expiry <= now + TOKEN_REFRESH_LEEWAY_MS;
+}
+
+async function refreshAccessToken(baseUrl, refreshToken) {
+  const data = await requestJson(baseUrl, '/auth/refresh', {
+    method: 'POST',
+    body: { refresh_token: refreshToken },
+    prefix: '/api/v1',
+    timeoutMs: LOGIN_TIMEOUT_MS
+  });
+  const token = data?.access_token || data?.token || data?.jwt;
+  if (!token) throw new Error('Token refresh succeeded but no access token was returned');
+  return {
+    token,
+    refresh_token: data?.refresh_token || refreshToken,
+    token_expires_at: tokenExpiryIso(token, data?.expires_in)
+  };
+}
+
 async function loginWithPassword(baseUrl, email, password) {
   const attempts = [];
   for (const prefix of API_PREFIXES) {
@@ -203,6 +239,8 @@ async function loginWithPassword(baseUrl, email, password) {
           }
           return {
             token,
+            refresh_token: data?.refresh_token || '',
+            token_expires_at: tokenExpiryIso(token, data?.expires_in),
             prefix,
             login_path: path,
             raw: data
@@ -764,12 +802,22 @@ async function fetchNewAPIState({ baseUrl, email, password, token }) {
   };
 }
 
-async function fetchSub2APICompatibleState({ baseUrl, email, password, token }) {
+async function fetchSub2APICompatibleState({ baseUrl, email, password, token, refreshToken, tokenExpiresAt }) {
   let activeToken = token;
+  let activeRefreshToken = refreshToken || '';
+  let activeTokenExpiresAt = tokenExpiresAt || tokenExpiryIso(token);
   let login = null;
+  if (activeRefreshToken && tokenNeedsRefresh(activeToken, activeTokenExpiresAt)) {
+    const refreshed = await refreshAccessToken(baseUrl, activeRefreshToken);
+    activeToken = refreshed.token;
+    activeRefreshToken = refreshed.refresh_token;
+    activeTokenExpiresAt = refreshed.token_expires_at;
+  }
   if (!activeToken) {
     login = await loginWithPassword(baseUrl, email, password);
     activeToken = login.token;
+    activeRefreshToken = login.refresh_token;
+    activeTokenExpiresAt = login.token_expires_at;
   }
   const apiPrefix = login?.prefix || '/api/v1';
 
@@ -832,6 +880,8 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token }) 
 
   return {
     token: activeToken,
+    refresh_token: activeRefreshToken,
+    token_expires_at: activeTokenExpiresAt,
     login,
     profile,
     usage,
@@ -968,6 +1018,9 @@ module.exports = {
   fetchSub2APIState,
   normalizeRates,
   loginWithPassword,
+  refreshAccessToken,
+  tokenExpiryIso,
+  tokenNeedsRefresh,
   requestJson,
   sanitizeUpstreamText,
   upstreamErrorMessage,

@@ -5,6 +5,37 @@ const assert = require('node:assert/strict');
 const repo = require('../src/repository');
 const db = require('../src/db');
 
+test('upstream refresh tokens are encrypted and can be rotated independently', () => {
+  const site = repo.createSite({
+    name: 'Refresh Token Test',
+    base_url: `https://refresh-token-${process.pid}.example`,
+    token: 'access-one',
+    refresh_token: 'refresh-one',
+    token_expires_at: '2026-07-22T01:00:00.000Z'
+  });
+
+  assert.deepEqual(repo.getCredentials(site.id), {
+    email: '',
+    password: '',
+    token: 'access-one',
+    refresh_token: 'refresh-one',
+    token_expires_at: '2026-07-22T01:00:00.000Z'
+  });
+  repo.saveCredentialTokens(site.id, {
+    token: 'access-two',
+    refresh_token: 'refresh-two',
+    token_expires_at: '2026-07-23T01:00:00.000Z'
+  });
+  const rotated = repo.getCredentials(site.id);
+  assert.equal(rotated.token, 'access-two');
+  assert.equal(rotated.refresh_token, 'refresh-two');
+  assert.equal(rotated.token_expires_at, '2026-07-23T01:00:00.000Z');
+
+  const stored = db.prepare('SELECT encrypted_token, encrypted_refresh_token FROM upstream_credentials WHERE upstream_site_id = ?').get(site.id);
+  assert.notEqual(stored.encrypted_token, 'access-two');
+  assert.notEqual(stored.encrypted_refresh_token, 'refresh-two');
+});
+
 test('secret settings are encrypted at rest and exposed only through explicit reads', () => {
   const saved = repo.setSecretSetting('pushplus_token', 'pushplus-test-secret');
   assert.equal(saved.masked_value, 'pus...ret');

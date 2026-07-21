@@ -27,7 +27,14 @@ async function syncSite(siteId, dependencies = {}) {
       upstreamType: site.upstream_type || 'auto',
       email: creds.email,
       password: creds.password,
-      token: creds.token
+      token: creds.token,
+      refreshToken: creds.refresh_token,
+      tokenExpiresAt: creds.token_expires_at
+    });
+    repository.saveCredentialTokens(siteId, {
+      token: result.token,
+      refresh_token: result.refresh_token,
+      token_expires_at: result.token_expires_at
     });
     repository.saveSyncSuccess(siteId, result, {
       maxSyncLogs: settings.max_sync_logs,

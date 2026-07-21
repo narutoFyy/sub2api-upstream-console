@@ -194,6 +194,8 @@ const siteSchema = z.object({
   email: z.string().optional().default(''),
   password: z.string().optional().default(''),
   token: z.string().optional().default(''),
+  refresh_token: z.string().optional().default(''),
+  token_expires_at: z.string().datetime().nullable().optional().default(null),
   tags: z.array(z.string()).optional().default([]),
   notes: z.string().optional().default(''),
   low_balance_threshold: z.number().min(0).max(100000000).optional().default(10),
@@ -216,6 +218,8 @@ const siteUpdateSchema = z.object({
   email: z.string().optional(),
   password: z.string().optional(),
   token: z.string().optional(),
+  refresh_token: z.string().optional(),
+  token_expires_at: z.string().datetime().nullable().optional(),
   tags: z.array(z.string()).optional(),
   notes: z.string().optional(),
   low_balance_threshold: z.number().min(0).max(100000000).optional(),
@@ -397,7 +401,9 @@ app.post('/api/import', (req, res, next) => {
         ...item,
         email: credentials.email || item.email || '',
         password: credentials.password || item.password || '',
-        token: credentials.token || item.token || ''
+        token: credentials.token || item.token || '',
+        refresh_token: credentials.refresh_token || item.refresh_token || '',
+        token_expires_at: credentials.token_expires_at || item.token_expires_at || null
       }));
       const existing = repo.listSites().find((site) => site.base_url === payload.base_url);
       const site = existing ? repo.updateSite(existing.id, payload) : repo.createSite(payload);
@@ -444,7 +450,9 @@ app.post('/api/upstreams/test', async (req, res, next) => {
       upstreamType: payload.upstream_type,
       email: payload.email,
       password: payload.password,
-      token: payload.token
+      token: payload.token,
+      refreshToken: payload.refresh_token,
+      tokenExpiresAt: payload.token_expires_at
     });
     res.json({
       ok: true,
