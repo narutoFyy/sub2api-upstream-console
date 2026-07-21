@@ -14,7 +14,11 @@ function normalizedPlatform(value) {
   return platform || 'openai';
 }
 
-function probeModelForKey(site, key) {
+function probeModelForKey(site, key, repository = repo) {
+  const groupModel = site?.id != null && key?.group_id != null
+    ? repository.getGroupProbeModel?.(site.id, key.group_id)
+    : '';
+  if (groupModel) return String(groupModel).trim();
   return normalizedPlatform(key.platform) === 'anthropic'
     ? String(site.anthropic_probe_model || '').trim()
     : String(site.openai_probe_model || '').trim();
@@ -44,10 +48,10 @@ function classifyProbeError(error) {
   };
 }
 
-async function probeKey(site, key, { request = requestJson, timeoutMs = 15000 } = {}) {
+async function probeKey(site, key, { request = requestJson, timeoutMs = 15000, repo: repository = repo } = {}) {
   const checkedAt = nowIso();
   const platform = normalizedPlatform(key.platform);
-  const model = probeModelForKey(site, key);
+  const model = probeModelForKey(site, key, repository);
   if (String(key.status || '').toLowerCase() === 'inactive' || String(key.status || '').toLowerCase() === 'disabled') {
     return {
       status: 'unavailable',

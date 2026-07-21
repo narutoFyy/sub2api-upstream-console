@@ -65,6 +65,9 @@ test('legacy database migrates in place without losing rows', () => {
   assert.equal(db.prepare('SELECT name FROM upstream_sites WHERE id=1').get().name, 'Legacy API');
   assert.equal(db.prepare('SELECT name FROM upstream_api_key_snapshots WHERE upstream_key_id=?').get('7').name, 'Legacy Key');
   assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='alert_events'").get());
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='console_settings'").get());
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_group_probe_settings'").get());
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_probe_model_catalog'").get());
   db.close();
 });
 

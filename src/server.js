@@ -12,12 +12,13 @@ const { importAllKeys } = require('./keyImportService');
 const { buildUpstreamMonitoring } = require('./monitoringService');
 const { checkUpstreamKeys, checkDueUpstreams } = require('./keyConnectivityService');
 const { pushPlusStatus, sendPushPlus } = require('./pushPlusClient');
+const { syncUpstreamModels } = require('./modelDiscoveryService');
+const { updateManagedKey, deleteManagedKey } = require('./keyMutationService');
+const { queryUpstreamUsage, getUpstreamUsageDetail } = require('./upstreamUsage');
 const {
   listSub2APIKeys,
   listSub2APIGroups,
-  createSub2APIKey,
-  updateSub2APIKey,
-  deleteSub2APIKey
+  createSub2APIKey
 } = require('./upstreamKeys');
 
 const app = express();
@@ -209,6 +210,16 @@ const updateUpstreamKeySchema = z.object({
   name: z.string().min(1).max(100).optional(),
   group_id: z.number().int().positive().optional(),
   status: z.enum(['active', 'inactive']).optional()
+});
+
+const pushPlusSettingSchema = z.object({
+  token: z.string().trim().min(8).max(500)
+});
+
+const groupProbeModelSchema = z.object({
+  selected_model: z.string().trim().max(200),
+  group_name: z.string().max(200).optional().default(''),
+  platform: z.string().max(100).optional().default('')
 });
 
 const ownSiteSchema = z.object({
@@ -745,6 +756,21 @@ app.get('/api/notifications/pushplus/status', (req, res) => {
   res.json(pushPlusStatus());
 });
 
+app.put('/api/notifications/pushplus/settings', (req, res, next) => {
+  try {
+    const payload = pushPlusSettingSchema.parse(req.body || {});
+    repo.setSecretSetting('pushplus_token', payload.token);
+    res.json({ ok: true, ...pushPlusStatus() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/notifications/pushplus/settings', (req, res) => {
+  const deleted = repo.deleteSetting('pushplus_token');
+  res.json({ ok: true, deleted, ...pushPlusStatus() });
+});
+
 app.post('/api/notifications/pushplus/test', async (req, res, next) => {
   try {
     const result = await sendPushPlus({
@@ -772,6 +798,47 @@ app.get('/api/upstreams/:id/key-groups', async (req, res, next) => {
   }
 });
 
+app.get('/api/upstreams/:id/models', (req, res) => {
+  const id = Number(req.params.id);
+  if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
+  return res.json({ items: repo.listUpstreamProbeModels(id) });
+});
+
+app.post('/api/upstreams/:id/models/sync', async (req, res, next) => {
+  try {
+    res.json(await syncUpstreamModels(Number(req.params.id)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.put('/api/upstreams/:id/models/groups/:groupId', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
+    const payload = groupProbeModelSchema.parse(req.body || {});
+    return res.json({ item: repo.setGroupProbeModel(id, req.params.groupId, payload) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+app.get('/api/upstreams/:id/usage', async (req, res, next) => {
+  try {
+    return res.json(await queryUpstreamUsage(Number(req.params.id), req.query));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+app.get('/api/upstreams/:id/usage/:usageId', async (req, res, next) => {
+  try {
+    return res.json(await getUpstreamUsageDetail(Number(req.params.id), req.params.usageId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 app.post('/api/upstreams/:id/keys', async (req, res, next) => {
   try {
     const ctx = getSiteCredentials(Number(req.params.id));
@@ -792,12 +859,9 @@ app.post('/api/upstreams/:id/keys', async (req, res, next) => {
 
 app.put('/api/upstreams/:id/keys/:keyId', async (req, res, next) => {
   try {
-    const ctx = getSiteCredentials(Number(req.params.id));
-    if (!ctx) return res.status(404).json({ error: 'Not found' });
     const payload = updateUpstreamKeySchema.parse(req.body || {});
-    const updated = await updateSub2APIKey(ctx.site, ctx.creds, req.params.keyId, payload);
-    syncSite(ctx.site.id).catch((err) => console.error('Post key-update sync failed:', err));
-    res.json({ item: sanitizeUpstreamKey(updated) });
+    const result = await updateManagedKey(Number(req.params.id), req.params.keyId, payload);
+    res.json({ item: sanitizeUpstreamKey(result.item), summary: result.summary });
   } catch (err) {
     next(err);
   }
@@ -805,11 +869,7 @@ app.put('/api/upstreams/:id/keys/:keyId', async (req, res, next) => {
 
 app.delete('/api/upstreams/:id/keys/:keyId', async (req, res, next) => {
   try {
-    const ctx = getSiteCredentials(Number(req.params.id));
-    if (!ctx) return res.status(404).json({ error: 'Not found' });
-    const result = await deleteSub2APIKey(ctx.site, ctx.creds, req.params.keyId);
-    syncSite(ctx.site.id).catch((err) => console.error('Post key-delete sync failed:', err));
-    res.json(result);
+    res.json(await deleteManagedKey(Number(req.params.id), req.params.keyId));
   } catch (err) {
     next(err);
   }

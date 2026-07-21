@@ -3,10 +3,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   classifyProbeError,
+  probeModelForKey,
   probeKey,
   checkUpstreamKeys,
   shouldCheckSite
 } = require('../src/keyConnectivityService');
+
+test('probeModelForKey prefers a group selection over site platform defaults', () => {
+  const repository = { getGroupProbeModel: (siteId, groupId) => siteId === 3 && groupId === 9 ? 'group-model' : '' };
+  assert.equal(probeModelForKey({ id: 3, openai_probe_model: 'site-model' }, { group_id: 9, platform: 'openai' }, repository), 'group-model');
+  assert.equal(probeModelForKey({ id: 3, openai_probe_model: 'site-model' }, { group_id: 10, platform: 'openai' }, repository), 'site-model');
+});
 
 test('classifyProbeError distinguishes timeout, auth, quota and rate limit', () => {
   assert.equal(classifyProbeError({ name: 'TimeoutError', message: 'timeout' }).status, 'timeout');

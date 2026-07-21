@@ -1,4 +1,5 @@
 const config = require('./config');
+const repo = require('./repository');
 
 class PushPlusError extends Error {
   constructor(message, status = 502) {
@@ -8,15 +9,32 @@ class PushPlusError extends Error {
   }
 }
 
-function pushPlusStatus() {
+function resolvePushPlusToken(dependencies = {}) {
+  if (dependencies.token !== undefined) {
+    return { token: dependencies.token, source: dependencies.token ? 'override' : 'none' };
+  }
+  const repository = dependencies.repo || repo;
+  const databaseToken = repository.getSecretSetting('pushplus_token');
+  if (databaseToken) return { token: databaseToken, source: 'database' };
+  if (config.pushPlusToken) return { token: config.pushPlusToken, source: 'environment' };
+  return { token: '', source: 'none' };
+}
+
+function pushPlusStatus(dependencies = {}) {
+  const resolved = resolvePushPlusToken(dependencies);
+  const repository = dependencies.repo || repo;
   return {
-    configured: Boolean(config.pushPlusToken),
+    configured: Boolean(resolved.token),
+    source: resolved.source,
+    token_masked: resolved.source === 'database'
+      ? repository.getMaskedSecretSetting('pushplus_token')
+      : (resolved.token ? '环境变量已设置' : ''),
     base_url: config.pushPlusBaseUrl
   };
 }
 
 async function sendPushPlus({ title, content }, dependencies = {}) {
-  const token = dependencies.token ?? config.pushPlusToken;
+  const { token } = resolvePushPlusToken(dependencies);
   const baseUrl = dependencies.baseUrl ?? config.pushPlusBaseUrl;
   const fetchImpl = dependencies.fetchImpl || fetch;
   if (!token) throw new PushPlusError('PushPlus Token 未配置', 422);
@@ -43,6 +61,7 @@ async function sendPushPlus({ title, content }, dependencies = {}) {
 
 module.exports = {
   PushPlusError,
+  resolvePushPlusToken,
   pushPlusStatus,
   sendPushPlus
 };

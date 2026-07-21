@@ -236,6 +236,163 @@ function getOwnSiteCredentials(id) {
   };
 }
 
+function getSecretSetting(key) {
+  const row = db.prepare('SELECT encrypted_value FROM console_settings WHERE key = ?').get(String(key));
+  return row ? decryptSecret(row.encrypted_value) : '';
+}
+
+function getMaskedSecretSetting(key) {
+  return maskSecret(getSecretSetting(key));
+}
+
+function setSecretSetting(key, value) {
+  const settingKey = String(key || '').trim();
+  if (!settingKey) throw new Error('Setting key is required');
+  const secret = String(value || '').trim();
+  if (!secret) {
+    deleteSetting(settingKey);
+    return null;
+  }
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO console_settings (key, encrypted_value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      encrypted_value=excluded.encrypted_value,
+      updated_at=excluded.updated_at
+  `).run(settingKey, encryptSecret(secret), now);
+  return { key: settingKey, masked_value: maskSecret(secret), updated_at: now };
+}
+
+function deleteSetting(key) {
+  return db.prepare('DELETE FROM console_settings WHERE key = ?').run(String(key)).changes > 0;
+}
+
+function replaceUpstreamProbeModels(siteId, groups, syncedAt = nowIso()) {
+  const normalizedGroups = Array.isArray(groups) ? groups : [];
+  const replace = db.transaction(() => {
+    const groupIds = normalizedGroups.map((group) => String(group.group_id ?? ''));
+    if (groupIds.length) {
+      const placeholders = groupIds.map(() => '?').join(', ');
+      db.prepare(`
+        DELETE FROM upstream_group_probe_settings
+        WHERE upstream_site_id = ? AND group_id NOT IN (${placeholders})
+      `).run(siteId, ...groupIds);
+    } else {
+      db.prepare('DELETE FROM upstream_group_probe_settings WHERE upstream_site_id = ?').run(siteId);
+    }
+
+    const upsertGroup = db.prepare(`
+      INSERT INTO upstream_group_probe_settings (
+        upstream_site_id, group_id, group_name, platform, selected_model,
+        discovery_status, discovery_error, synced_at, updated_at
+      ) VALUES (
+        @upstream_site_id, @group_id, @group_name, @platform, '',
+        @discovery_status, @discovery_error, @synced_at, @updated_at
+      )
+      ON CONFLICT(upstream_site_id, group_id) DO UPDATE SET
+        group_name=excluded.group_name,
+        platform=excluded.platform,
+        discovery_status=excluded.discovery_status,
+        discovery_error=excluded.discovery_error,
+        synced_at=excluded.synced_at,
+        updated_at=excluded.updated_at
+    `);
+    const insertModel = db.prepare(`
+      INSERT INTO upstream_probe_model_catalog (
+        upstream_site_id, group_id, model, platform, source, last_seen_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const group of normalizedGroups) {
+      const groupId = String(group.group_id ?? '');
+      upsertGroup.run({
+        upstream_site_id: siteId,
+        group_id: groupId,
+        group_name: group.group_name || '',
+        platform: group.platform || '',
+        discovery_status: group.discovery_status || 'success',
+        discovery_error: group.discovery_error || '',
+        synced_at: syncedAt,
+        updated_at: syncedAt
+      });
+      db.prepare(`
+        DELETE FROM upstream_probe_model_catalog
+        WHERE upstream_site_id = ? AND group_id = ?
+      `).run(siteId, groupId);
+      const seen = new Set();
+      for (const item of group.models || []) {
+        const model = String(typeof item === 'string' ? item : item?.model || '').trim();
+        if (!model || seen.has(model)) continue;
+        seen.add(model);
+        insertModel.run(
+          siteId,
+          groupId,
+          model,
+          group.platform || '',
+          typeof item === 'string' ? (group.source || '') : (item.source || group.source || ''),
+          syncedAt
+        );
+      }
+    }
+  });
+  replace();
+  return listUpstreamProbeModels(siteId);
+}
+
+function listUpstreamProbeModels(siteId) {
+  const groups = db.prepare(`
+    SELECT * FROM upstream_group_probe_settings
+    WHERE upstream_site_id = ?
+    ORDER BY group_name COLLATE NOCASE, group_id
+  `).all(siteId);
+  const models = db.prepare(`
+    SELECT group_id, model, platform, source, last_seen_at
+    FROM upstream_probe_model_catalog
+    WHERE upstream_site_id = ?
+    ORDER BY group_id, model COLLATE NOCASE
+  `).all(siteId);
+  const byGroup = new Map();
+  for (const item of models) {
+    if (!byGroup.has(item.group_id)) byGroup.set(item.group_id, []);
+    byGroup.get(item.group_id).push(item);
+  }
+  return groups.map((group) => ({ ...group, models: byGroup.get(group.group_id) || [] }));
+}
+
+function setGroupProbeModel(siteId, groupId, input) {
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO upstream_group_probe_settings (
+      upstream_site_id, group_id, group_name, platform, selected_model,
+      discovery_status, discovery_error, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'manual', '', ?)
+    ON CONFLICT(upstream_site_id, group_id) DO UPDATE SET
+      group_name=CASE WHEN excluded.group_name != '' THEN excluded.group_name ELSE group_name END,
+      platform=CASE WHEN excluded.platform != '' THEN excluded.platform ELSE platform END,
+      selected_model=excluded.selected_model,
+      updated_at=excluded.updated_at
+  `).run(
+    siteId,
+    String(groupId ?? ''),
+    input.group_name || '',
+    input.platform || '',
+    String(input.selected_model || '').trim(),
+    now
+  );
+  return db.prepare(`
+    SELECT * FROM upstream_group_probe_settings
+    WHERE upstream_site_id = ? AND group_id = ?
+  `).get(siteId, String(groupId ?? ''));
+}
+
+function getGroupProbeModel(siteId, groupId) {
+  return db.prepare(`
+    SELECT selected_model FROM upstream_group_probe_settings
+    WHERE upstream_site_id = ? AND group_id = ?
+  `).get(siteId, String(groupId ?? ''))?.selected_model || '';
+}
+
 function getMaskedOwnSiteCredentials(id) {
   const creds = getOwnSiteCredentials(id);
   return {
@@ -1444,6 +1601,14 @@ module.exports = {
   getSite,
   getCredentials,
   getMaskedCredentials,
+  getSecretSetting,
+  getMaskedSecretSetting,
+  setSecretSetting,
+  deleteSetting,
+  replaceUpstreamProbeModels,
+  listUpstreamProbeModels,
+  setGroupProbeModel,
+  getGroupProbeModel,
   createSite,
   updateSite,
   deleteSite,

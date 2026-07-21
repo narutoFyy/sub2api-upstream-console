@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS upstream_sites (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_upstream_sites_base_url ON upstream_sites(base_url);
 
+CREATE TABLE IF NOT EXISTS console_settings (
+  key TEXT PRIMARY KEY,
+  encrypted_value TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS upstream_credentials (
   upstream_site_id INTEGER PRIMARY KEY,
   encrypted_email TEXT NOT NULL DEFAULT '',
@@ -284,6 +290,35 @@ CREATE TABLE IF NOT EXISTS upstream_key_import_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_upstream_key_import_runs_site ON upstream_key_import_runs(upstream_site_id, started_at);
+
+CREATE TABLE IF NOT EXISTS upstream_group_probe_settings (
+  upstream_site_id INTEGER NOT NULL,
+  group_id TEXT NOT NULL DEFAULT '',
+  group_name TEXT NOT NULL DEFAULT '',
+  platform TEXT NOT NULL DEFAULT '',
+  selected_model TEXT NOT NULL DEFAULT '',
+  discovery_status TEXT NOT NULL DEFAULT 'pending',
+  discovery_error TEXT NOT NULL DEFAULT '',
+  synced_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (upstream_site_id, group_id),
+  FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS upstream_probe_model_catalog (
+  upstream_site_id INTEGER NOT NULL,
+  group_id TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  platform TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (upstream_site_id, group_id, model),
+  FOREIGN KEY (upstream_site_id, group_id)
+    REFERENCES upstream_group_probe_settings(upstream_site_id, group_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_probe_model_catalog_site_group
+  ON upstream_probe_model_catalog(upstream_site_id, group_id);
 
 CREATE TABLE IF NOT EXISTS upstream_key_connectivity_checks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,7 +1,7 @@
 require('./testEnv');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { sendPushPlus } = require('../src/pushPlusClient');
+const { pushPlusStatus, resolvePushPlusToken, sendPushPlus } = require('../src/pushPlusClient');
 const { evaluateKeyConnectivity, evaluateSiteAlerts } = require('../src/alertService');
 
 function alertRepository() {
@@ -49,6 +49,22 @@ test('sendPushPlus posts the expected safe payload', async () => {
   });
   assert.equal(result.ok, true);
   assert.deepEqual(body, { token: 'push-token', title: 'Title', content: 'Body', template: 'txt' });
+});
+
+test('PushPlus resolves database settings without exposing the full token', () => {
+  const repository = {
+    getSecretSetting: () => 'database-push-token',
+    getMaskedSecretSetting: () => 'dat...ken'
+  };
+  assert.deepEqual(resolvePushPlusToken({ repo: repository }), {
+    token: 'database-push-token',
+    source: 'database'
+  });
+  const status = pushPlusStatus({ repo: repository });
+  assert.equal(status.configured, true);
+  assert.equal(status.source, 'database');
+  assert.equal(status.token_masked, 'dat...ken');
+  assert.equal(JSON.stringify(status).includes('database-push-token'), false);
 });
 
 test('Key incident notifies once at threshold and once after recovery', async () => {

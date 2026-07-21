@@ -4,6 +4,7 @@ const VIEW_META = {
   keys: { title: 'Key 管理', search: '搜索 Key、分组或上游' },
   'own-sites': { title: '自己站观测', search: '搜索自己站账号或路由' },
   pricing: { title: '模型价格', search: '搜索模型或上游' },
+  usage: { title: '使用明细', search: '搜索模型、Key 或分组' },
   alerts: { title: '告警事件', search: '搜索告警或上游' },
   logs: { title: '同步记录', search: '搜索日志或上游' },
   settings: { title: '设置', search: '搜索上游或 Key' }
@@ -19,12 +20,14 @@ const state = {
   ownSites: [],
   ownRoutes: [],
   expandedSites: new Set(),
+  expandedKeySites: new Set(),
   monitorStatus: 'all',
   monitorSort: 'balance-asc',
   search: '',
   keyFilters: { upstream: '', platform: '', health: '' },
   alertStatus: '',
-  createdKey: ''
+  createdKey: '',
+  usage: { items: [], total: 0, page: 1, pageSize: 20, pages: 1, loading: false, error: '', upstreamId: '', startDate: '', endDate: '' }
 };
 
 const money = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
@@ -136,6 +139,9 @@ function setActiveView(view) {
   document.querySelector('#sidebar').classList.remove('open');
   renderCurrentView();
   refreshIcons();
+  if (view === 'usage' && state.monitoring.items.length && !state.usage.loading) {
+    window.queueMicrotask(loadUsage);
+  }
 }
 
 function metricMarkup(items) {
@@ -266,20 +272,41 @@ function renderGlobalKeys() {
   siteFilter.innerHTML = '<option value="">全部上游</option>' + (state.monitoring.items || []).map((site) => `<option value="${site.id}">${escapeHtml(site.name)}</option>`).join('');
   siteFilter.value = current;
   const keyword = state.search.toLowerCase();
-  const keys = allKeys().filter((key) => {
-    if (keyword && !`${key.upstream_name} ${key.name} ${key.key_masked} ${key.group_name}`.toLowerCase().includes(keyword)) return false;
-    if (state.keyFilters.upstream && String(key.upstream_site_id) !== state.keyFilters.upstream) return false;
-    if (state.keyFilters.platform && platformLabel(key.platform).toLowerCase() !== state.keyFilters.platform) return false;
-    const failed = ['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error'].includes(key.connectivity_status);
-    if (state.keyFilters.health === 'connected' && key.connectivity_status !== 'connected') return false;
-    if (state.keyFilters.health === 'failed' && !failed) return false;
-    if (state.keyFilters.health === 'untested' && (key.connectivity_status && !['untested', 'unconfigured', 'unavailable'].includes(key.connectivity_status))) return false;
-    return true;
+  const sites = (state.monitoring.items || []).map((site) => {
+    const keys = (site.keys || []).filter((key) => {
+      if (key.import_state === 'missing') return false;
+      if (keyword && !`${site.name} ${site.base_url} ${key.name} ${key.key_masked} ${key.group_name}`.toLowerCase().includes(keyword)) return false;
+      if (state.keyFilters.platform && platformLabel(key.platform).toLowerCase() !== state.keyFilters.platform) return false;
+      const failed = ['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error'].includes(key.connectivity_status);
+      if (state.keyFilters.health === 'connected' && key.connectivity_status !== 'connected') return false;
+      if (state.keyFilters.health === 'failed' && !failed) return false;
+      if (state.keyFilters.health === 'untested' && (key.connectivity_status && !['untested', 'unconfigured', 'unavailable'].includes(key.connectivity_status))) return false;
+      return true;
+    });
+    return { ...site, filteredKeys: keys };
+  }).filter((site) => {
+    if (state.keyFilters.upstream && String(site.id) !== state.keyFilters.upstream) return false;
+    const siteMatches = keyword && `${site.name} ${site.base_url}`.toLowerCase().includes(keyword);
+    return siteMatches || site.filteredKeys.length > 0 || (!keyword && !state.keyFilters.platform && !state.keyFilters.health);
   });
-  document.querySelector('#globalKeyRows').innerHTML = keys.map((key) => {
+
+  document.querySelector('#globalKeyRows').innerHTML = sites.map((site) => {
+    const expanded = state.expandedKeySites.has(Number(site.id));
+    const keys = site.filteredKeys;
+    const active = keys.filter((key) => key.status === 'active').length;
+    const inactive = keys.filter((key) => key.status !== 'active').length;
+    const failed = keys.filter((key) => ['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error'].includes(key.connectivity_status)).length;
+    return `<tr class="data-row"><td><div class="upstream-name-cell"><button class="row-chevron ${expanded ? 'expanded' : ''}" type="button" data-toggle-key-site="${site.id}" aria-label="展开 ${escapeHtml(site.name)}"><i data-lucide="chevron-right"></i></button><div class="upstream-identity"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></div></td><td>${keys.length}</td><td class="healthy-text">${active}</td><td>${inactive}</td><td class="${failed ? 'danger-text' : ''}">${failed}</td><td>${timeText(site.last_sync_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-import-keys="${site.id}" title="导入全部 Key"><i data-lucide="download"></i></button><button class="icon-btn" type="button" data-check-site-keys="${site.id}" title="检测全部 Key"><i data-lucide="activity"></i></button></div></td></tr>${expanded ? renderManagedKeyRows(site, keys) : ''}`;
+  }).join('') || '<tr><td colspan="7"><div class="empty-state">没有匹配的上游或 Key</div></td></tr>';
+}
+
+function renderManagedKeyRows(site, keys) {
+  const body = keys.map((key) => {
+    const failed = ['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error'].includes(key.connectivity_status);
     const connectivity = connectivityMeta(key);
-    return `<tr class="data-row"><td><strong>${escapeHtml(key.upstream_name)}</strong></td><td>${escapeHtml(key.name || '-')}</td><td><code>${escapeHtml(key.key_masked || '-')}</code></td><td>${escapeHtml(key.group_name || '-')}</td><td>${escapeHtml(platformLabel(key.platform))}</td><td class="numeric">${rateText(key.group_rate)}</td><td><span class="status-label ${connectivity.tone}-text"><span class="status-dot ${connectivity.dot}"></span>${escapeHtml(connectivity.label)}</span></td><td>${timeText(key.last_checked_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-check-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${key.upstream_site_id}" title="检测"><i data-lucide="activity"></i></button><button class="icon-btn" type="button" data-toggle-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${key.upstream_site_id}" data-next-status="${key.status === 'active' ? 'inactive' : 'active'}" title="${key.status === 'active' ? '停用' : '启用'}"><i data-lucide="${key.status === 'active' ? 'pause' : 'play'}"></i></button><button class="icon-btn danger-text" type="button" data-delete-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${key.upstream_site_id}" title="删除"><i data-lucide="trash-2"></i></button></div></td></tr>`;
-  }).join('') || '<tr><td colspan="9"><div class="empty-state">没有匹配的 Key</div></td></tr>';
+    return `<tr class="${failed ? 'failure-row' : ''}"><td>${escapeHtml(key.name || '-')}</td><td><code>${escapeHtml(key.key_masked || '-')}</code></td><td>${escapeHtml(key.group_name || '-')}</td><td>${escapeHtml(platformLabel(key.platform))}</td><td class="numeric">${rateText(key.group_rate)}</td><td><span class="status-label ${connectivity.tone}-text"><span class="status-dot ${connectivity.dot}"></span>${escapeHtml(connectivity.label)}</span></td><td>${timeText(key.last_checked_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-check-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="检测"><i data-lucide="activity"></i></button><button class="icon-btn" type="button" data-toggle-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" data-next-status="${key.status === 'active' ? 'inactive' : 'active'}" title="${key.status === 'active' ? '暂停' : '启用'}"><i data-lucide="${key.status === 'active' ? 'pause' : 'play'}"></i></button><button class="icon-btn danger-text" type="button" data-delete-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="删除"><i data-lucide="trash-2"></i></button></div></td></tr>`;
+  }).join('');
+  return `<tr class="expanded-row"><td colspan="7"><div class="expanded-panel"><div class="expanded-header"><strong>${escapeHtml(site.name)} · Key 明细</strong><span class="muted">${keys.length} 个</span></div><div class="key-inner-wrap"><table class="data-table key-inner-table"><thead><tr><th>Key 名称</th><th>Key</th><th>所属分组</th><th>平台</th><th>倍率</th><th>联通性</th><th>最近检测</th><th class="align-right">操作</th></tr></thead><tbody>${body || '<tr><td colspan="8"><div class="empty-state">没有匹配的 Key</div></td></tr>'}</tbody></table></div></div></td></tr>`;
 }
 
 function renderOverview() {
@@ -327,9 +354,15 @@ function renderLogs() {
 
 function renderPushPlus() {
   const configured = Boolean(state.monitoring.pushplus?.configured);
+  const source = state.monitoring.pushplus?.source;
   const badge = document.querySelector('#pushPlusBadge');
   badge.innerHTML = `<span class="status-dot ${configured ? 'healthy' : 'neutral'}"></span><span>PushPlus ${configured ? '已连接' : '未配置'}</span>`;
-  document.querySelector('#pushPlusSettingStatus').textContent = configured ? '已通过环境变量配置' : '请配置 PUSHPLUS_TOKEN';
+  const statusText = !configured
+    ? '未配置'
+    : source === 'database'
+      ? `控制台配置 · ${state.monitoring.pushplus.token_masked || '已加密保存'}`
+      : '环境变量配置';
+  document.querySelector('#pushPlusSettingStatus').textContent = statusText;
   const count = Number(state.monitoring.open_alerts || 0);
   const countEl = document.querySelector('#sidebarAlertCount');
   countEl.hidden = !count;
@@ -342,10 +375,118 @@ function renderCurrentView() {
   if (state.activeView === 'keys') renderGlobalKeys();
   if (state.activeView === 'own-sites') renderOwnSites();
   if (state.activeView === 'pricing') renderPricing();
+  if (state.activeView === 'usage') renderUsage();
   if (state.activeView === 'alerts') renderAlerts();
   if (state.activeView === 'logs') renderLogs();
   renderPushPlus();
   refreshIcons();
+}
+
+function localDateValue(date) {
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function ensureUsageDates() {
+  if (!state.usage.endDate) state.usage.endDate = localDateValue(new Date());
+  if (!state.usage.startDate) {
+    const start = new Date();
+    start.setDate(start.getDate() - 7);
+    state.usage.startDate = localDateValue(start);
+  }
+}
+
+function usageSite() {
+  return (state.monitoring.items || []).find((site) => String(site.id) === String(state.usage.upstreamId));
+}
+
+function renderUsageFilters() {
+  ensureUsageDates();
+  const sites = (state.monitoring.items || []).filter((site) => site.status !== 'disabled');
+  if (!state.usage.upstreamId && sites.length) state.usage.upstreamId = String(sites[0].id);
+  const upstream = document.querySelector('#usageUpstreamFilter');
+  upstream.innerHTML = sites.map((site) => `<option value="${site.id}">${escapeHtml(site.name)}</option>`).join('') || '<option value="">没有可用上游</option>';
+  upstream.value = state.usage.upstreamId;
+  document.querySelector('#usageStartDate').value = state.usage.startDate;
+  document.querySelector('#usageEndDate').value = state.usage.endDate;
+  const site = usageSite();
+  const keys = (site?.keys || []).filter((key) => key.import_state !== 'missing');
+  const keyValue = document.querySelector('#usageKeyFilter').value;
+  document.querySelector('#usageKeyFilter').innerHTML = '<option value="">全部 Key</option>' + keys.map((key) => `<option value="${escapeHtml(key.upstream_key_id)}">${escapeHtml(key.name || key.key_masked || key.upstream_key_id)}</option>`).join('');
+  document.querySelector('#usageKeyFilter').value = keyValue;
+  const groups = [...new Map(keys.filter((key) => key.group_id != null).map((key) => [String(key.group_id), key])).values()];
+  const groupValue = document.querySelector('#usageGroupFilter').value;
+  document.querySelector('#usageGroupFilter').innerHTML = '<option value="">全部分组</option>' + groups.map((key) => `<option value="${escapeHtml(key.group_id)}">${escapeHtml(key.group_name || key.group_id)}</option>`).join('');
+  document.querySelector('#usageGroupFilter').value = groupValue;
+}
+
+function renderUsage() {
+  renderUsageFilters();
+  const keyword = state.search.toLowerCase();
+  const rows = state.usage.items.filter((item) => !keyword || `${item.key_name} ${item.key_masked} ${item.group_name} ${item.model} ${item.inbound_endpoint}`.toLowerCase().includes(keyword));
+  const body = state.usage.loading
+    ? '<tr><td colspan="8"><div class="empty-state">正在读取上游使用记录...</div></td></tr>'
+    : state.usage.error
+      ? `<tr><td colspan="8"><div class="empty-state danger-text">${escapeHtml(state.usage.error)}</div></td></tr>`
+      : rows.map((item) => `<tr class="data-row"><td><div class="cell-stack"><span>${timeText(item.created_at)}</span><small>${escapeHtml(item.request_type || (item.stream ? 'stream' : 'sync'))}</small></div></td><td><div class="cell-stack"><strong>${escapeHtml(item.key_name || item.key_masked || '-')}</strong><small>${escapeHtml(item.group_name || '-')}</small></div></td><td><div class="cell-stack"><strong>${escapeHtml(item.model || '-')}</strong><small>${escapeHtml(item.inbound_endpoint || '-')}</small></div></td><td><div class="usage-token-cell"><span>入 ${tokenText(item.input_tokens)}</span><small>出 ${tokenText(item.output_tokens)} · 缓存 ${tokenText(item.cache_read_tokens)}</small></div></td><td class="numeric">$${numberText(item.actual_cost, '0')}</td><td class="numeric">${rateText(item.rate_multiplier)}</td><td class="numeric">${item.duration_ms == null ? '-' : `${numberText(item.duration_ms)} ms`}</td><td class="align-right"><button class="icon-btn" type="button" data-usage-detail="${escapeHtml(item.id)}" title="查看请求详情"><i data-lucide="panel-right-open"></i></button></td></tr>`).join('') || '<tr><td colspan="8"><div class="empty-state">该条件下没有使用记录</div></td></tr>';
+  document.querySelector('#usageRows').innerHTML = body;
+  document.querySelector('#usagePageSummary').textContent = `第 ${state.usage.page} / ${Math.max(1, state.usage.pages)} 页 · 共 ${integers.format(state.usage.total)} 条`;
+  document.querySelector('#usagePrevBtn').disabled = state.usage.loading || state.usage.page <= 1;
+  document.querySelector('#usageNextBtn').disabled = state.usage.loading || state.usage.page >= state.usage.pages;
+}
+
+function usageQueryString() {
+  const params = new URLSearchParams({ page: String(state.usage.page), page_size: String(state.usage.pageSize) });
+  const fields = {
+    start_date: document.querySelector('#usageStartDate').value,
+    end_date: document.querySelector('#usageEndDate').value,
+    api_key_id: document.querySelector('#usageKeyFilter').value,
+    group_id: document.querySelector('#usageGroupFilter').value,
+    model: document.querySelector('#usageModelFilter').value.trim(),
+    request_type: document.querySelector('#usageTypeFilter').value
+  };
+  Object.entries(fields).forEach(([key, value]) => { if (value) params.set(key, value); });
+  return params.toString();
+}
+
+async function loadUsage() {
+  if (!state.usage.upstreamId) return renderUsage();
+  state.usage.loading = true;
+  state.usage.error = '';
+  renderUsage();
+  try {
+    const result = await api(`/api/upstreams/${state.usage.upstreamId}/usage?${usageQueryString()}`);
+    state.usage.items = result.items || [];
+    state.usage.total = Number(result.total || 0);
+    state.usage.page = Number(result.page || state.usage.page);
+    state.usage.pages = Number(result.pages || 1);
+  } catch (error) {
+    state.usage.items = [];
+    state.usage.total = 0;
+    state.usage.pages = 1;
+    state.usage.error = error.message;
+  } finally {
+    state.usage.loading = false;
+    renderUsage();
+    refreshIcons();
+  }
+}
+
+function showUsageDetail(item, upstreamName = '') {
+  document.querySelector('#usageDetailSubtitle').textContent = `${upstreamName} · ${item.created_at ? new Date(item.created_at).toLocaleString('zh-CN', { hour12: false }) : ''}`;
+  document.querySelector('#usageDetailContent').innerHTML = `<div class="detail-block"><h3>请求</h3><div class="detail-list"><div class="detail-line"><span>请求 ID</span><strong>${escapeHtml(item.request_id || '-')}</strong></div><div class="detail-line"><span>模型</span><strong>${escapeHtml(item.model || '-')}</strong></div><div class="detail-line"><span>入口</span><strong>${escapeHtml(item.inbound_endpoint || '-')}</strong></div><div class="detail-line"><span>类型</span><strong>${escapeHtml(item.request_type || (item.stream ? 'stream' : 'sync'))}</strong></div><div class="detail-line"><span>Key</span><strong>${escapeHtml(item.key_name || item.key_masked || '-')}</strong></div><div class="detail-line"><span>分组</span><strong>${escapeHtml(item.group_name || '-')}</strong></div></div></div><div class="detail-block"><h3>计费与性能</h3><div class="detail-list"><div class="detail-line"><span>输入 / 输出 Token</span><strong>${tokenText(item.input_tokens)} / ${tokenText(item.output_tokens)}</strong></div><div class="detail-line"><span>缓存读取 / 创建</span><strong>${tokenText(item.cache_read_tokens)} / ${tokenText(item.cache_creation_tokens)}</strong></div><div class="detail-line"><span>实际费用</span><strong>$${numberText(item.actual_cost, '0')}</strong></div><div class="detail-line"><span>倍率</span><strong>${rateText(item.rate_multiplier)}</strong></div><div class="detail-line"><span>总耗时 / 首 Token</span><strong>${numberText(item.duration_ms)} ms / ${numberText(item.first_token_ms)} ms</strong></div></div></div><div class="detail-block"><h3>客户端</h3><div class="detail-list"><div class="detail-line"><span>IP</span><strong>${escapeHtml(item.ip_address || '-')}</strong></div><div class="detail-line"><span>User-Agent</span><strong>${escapeHtml(item.user_agent || '-')}</strong></div></div></div>`;
+  if (!document.querySelector('#usageDetailDialog').open) document.querySelector('#usageDetailDialog').showModal();
+  refreshIcons();
+}
+
+async function openUsageDetail(usageId) {
+  const cached = state.usage.items.find((item) => String(item.id) === String(usageId));
+  if (cached) return showUsageDetail(cached, usageSite()?.name || '');
+  setBusy(true);
+  try {
+    const result = await api(`/api/upstreams/${state.usage.upstreamId}/usage/${encodeURIComponent(usageId)}`);
+    showUsageDetail(result.item || {}, result.upstream?.name || '');
+  } finally { setBusy(false); }
 }
 
 async function refreshAll({ quiet = false } = {}) {
@@ -376,6 +517,9 @@ async function refreshAll({ quiet = false } = {}) {
     renderLogs();
     renderPushPlus();
     renderCurrentView();
+    if (state.activeView === 'usage' && !state.usage.loading && !state.usage.items.length) {
+      window.queueMicrotask(loadUsage);
+    }
   } finally {
     setBusy(false);
   }
@@ -416,6 +560,30 @@ function fillUpstreamForm(detail = null) {
   form.notes.value = site.notes || '';
   document.querySelector('#upstreamDialogTitle').textContent = site.id ? '编辑上游' : '新增上游';
   document.querySelector('#upstreamFormMessage').textContent = '';
+  document.querySelector('#probeModelSection').hidden = !site.id;
+  document.querySelector('#probeModelGroups').innerHTML = site.id ? '<div class="empty-state">加载中...</div>' : '';
+}
+
+function probeSourceText(item) {
+  if (item.discovery_status === 'live') return '模型接口';
+  if (item.discovery_status === 'usage') return '近期使用记录';
+  if (item.discovery_status === 'manual_only') return '手动配置';
+  return '未发现模型';
+}
+
+function renderProbeModels(items = []) {
+  const container = document.querySelector('#probeModelGroups');
+  container.innerHTML = items.map((item, index) => {
+    const listId = `probe-model-options-${index}`;
+    const options = (item.models || []).map((model) => `<option value="${escapeHtml(model.model)}"></option>`).join('');
+    return `<div class="probe-model-row"><div class="probe-model-meta"><strong>${escapeHtml(item.group_name || item.group_id)}</strong><small>${escapeHtml(platformLabel(item.platform))}${item.discovery_error ? ` · ${escapeHtml(item.discovery_error)}` : ''}</small></div><div><input value="${escapeHtml(item.selected_model || '')}" list="${listId}" data-probe-model-group="${escapeHtml(item.group_id)}" data-group-name="${escapeHtml(item.group_name || '')}" data-platform="${escapeHtml(item.platform || '')}" placeholder="选择或输入检测模型" /><datalist id="${listId}">${options}</datalist></div><span class="probe-model-source">${probeSourceText(item)} · ${(item.models || []).length} 个</span></div>`;
+  }).join('') || '<div class="empty-state">尚未同步分组模型</div>';
+}
+
+async function loadProbeModels(siteId) {
+  if (!siteId) return;
+  const result = await api(`/api/upstreams/${siteId}/models`);
+  renderProbeModels(result.items || []);
 }
 
 async function openUpstreamDialog(siteId = null) {
@@ -423,6 +591,7 @@ async function openUpstreamDialog(siteId = null) {
   try {
     const detail = siteId ? await api(`/api/upstreams/${siteId}`) : null;
     fillUpstreamForm(detail);
+    if (siteId) await loadProbeModels(siteId);
     document.querySelector('#upstreamDialog').showModal();
     refreshIcons();
   } finally { setBusy(false); }
@@ -540,12 +709,31 @@ document.querySelector('#monitorSortSelect').addEventListener('change', (event) 
 document.querySelector('#keyUpstreamFilter').addEventListener('change', (event) => { state.keyFilters.upstream = event.target.value; renderGlobalKeys(); refreshIcons(); });
 document.querySelector('#keyPlatformFilter').addEventListener('change', (event) => { state.keyFilters.platform = event.target.value; renderGlobalKeys(); refreshIcons(); });
 document.querySelector('#keyHealthFilter').addEventListener('change', (event) => { state.keyFilters.health = event.target.value; renderGlobalKeys(); refreshIcons(); });
+document.querySelector('#usageUpstreamFilter').addEventListener('change', (event) => { state.usage.upstreamId = event.target.value; state.usage.page = 1; renderUsageFilters(); loadUsage(); });
+document.querySelector('#usageApplyBtn').addEventListener('click', () => { state.usage.page = 1; state.usage.startDate = document.querySelector('#usageStartDate').value; state.usage.endDate = document.querySelector('#usageEndDate').value; loadUsage(); });
+document.querySelector('#usageRefreshBtn').addEventListener('click', loadUsage);
+document.querySelector('#usagePrevBtn').addEventListener('click', () => { if (state.usage.page > 1) { state.usage.page -= 1; loadUsage(); } });
+document.querySelector('#usageNextBtn').addEventListener('click', () => { if (state.usage.page < state.usage.pages) { state.usage.page += 1; loadUsage(); } });
 document.querySelector('#alertStatusFilter').addEventListener('change', (event) => { state.alertStatus = event.target.value; renderAlerts(); });
 document.querySelector('#createKeyUpstream').addEventListener('change', loadCreateKeyGroups);
 document.querySelector('#createKeyPlatform').addEventListener('change', loadCreateKeyGroups);
 
 document.querySelector('#refreshBtn').addEventListener('click', (event) => runAction(event.currentTarget, '刷新中', async () => { await refreshAll({ quiet: true }); toast('数据已刷新', 'success'); }));
 document.querySelector('#syncAllBtn').addEventListener('click', (event) => runAction(event.currentTarget, '同步中', async () => { await api('/api/sync-all', { method: 'POST' }); await refreshAll({ quiet: true }); toast('全部上游同步完成', 'success'); }));
+
+document.querySelector('#pushPlusForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const tokenInput = document.querySelector('#pushPlusTokenInput');
+  const token = tokenInput.value.trim();
+  if (!token) return toast('请输入 PushPlus Token', 'error');
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  await runAction(submit, '保存中', async () => {
+    await api('/api/notifications/pushplus/settings', { method: 'PUT', body: JSON.stringify({ token }) });
+    tokenInput.value = '';
+    await refreshAll({ quiet: true });
+    toast('PushPlus 配置已保存', 'success');
+  });
+});
 
 document.querySelector('#upstreamForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -569,6 +757,33 @@ document.querySelector('#testUpstreamBtn').addEventListener('click', async (even
   document.querySelector('#upstreamFormMessage').textContent = `连接成功 · 余额 ${numberText(result.snapshot?.balance)} · Key ${result.keys_count || 0}`;
   document.querySelector('#upstreamFormMessage').className = 'form-message success';
 }));
+
+document.querySelector('#syncProbeModelsBtn').addEventListener('click', async (event) => runAction(event.currentTarget, '同步中', async () => {
+  const siteId = document.querySelector('#upstreamForm').elements.id.value;
+  if (!siteId) throw new Error('请先保存上游');
+  const result = await api(`/api/upstreams/${siteId}/models/sync`, { method: 'POST' });
+  renderProbeModels(result.items || []);
+  toast(`模型同步完成：接口 ${result.live_groups} 个分组，使用记录回退 ${result.fallback_groups} 个分组`, 'success');
+}));
+
+document.querySelector('#probeModelGroups').addEventListener('change', async (event) => {
+  const input = event.target.closest('[data-probe-model-group]');
+  if (!input) return;
+  const siteId = document.querySelector('#upstreamForm').elements.id.value;
+  try {
+    await api(`/api/upstreams/${siteId}/models/groups/${encodeURIComponent(input.dataset.probeModelGroup)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        selected_model: input.value.trim(),
+        group_name: input.dataset.groupName,
+        platform: input.dataset.platform
+      })
+    });
+    toast('分组检测模型已保存', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+});
 
 document.querySelector('#createKeyForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -656,13 +871,15 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.copyText) { await navigator.clipboard.writeText(target.dataset.copyText); return toast('已复制', 'success'); }
   if (target.dataset.monitorStatus) { state.monitorStatus = target.dataset.monitorStatus; renderMonitoring(); refreshIcons(); return; }
   if (target.dataset.toggleSite) { const id = Number(target.dataset.toggleSite); state.expandedSites.has(id) ? state.expandedSites.delete(id) : state.expandedSites.add(id); renderMonitoring(); refreshIcons(); return; }
+  if (target.dataset.toggleKeySite) { const id = Number(target.dataset.toggleKeySite); state.expandedKeySites.has(id) ? state.expandedKeySites.delete(id) : state.expandedKeySites.add(id); renderGlobalKeys(); refreshIcons(); return; }
   if (target.dataset.detailSite) return openDetail(Number(target.dataset.detailSite));
+  if (target.dataset.usageDetail) return openUsageDetail(target.dataset.usageDetail);
   if (target.dataset.editFromDetail) { closeDialog('detailDialog'); return openUpstreamDialog(Number(target.dataset.editFromDetail)); }
   if (target.dataset.syncSite) return runAction(target, '同步中', async () => { await api(`/api/upstreams/${target.dataset.syncSite}/sync`, { method: 'POST' }); await refreshAll({ quiet: true }); toast('上游同步完成', 'success'); });
   if (target.dataset.importKeys) return runAction(target, '导入中', async () => { const result = await api(`/api/upstreams/${target.dataset.importKeys}/keys/import`, { method: 'POST' }); await refreshAll({ quiet: true }); toast(result.message, 'success'); });
   if (target.dataset.checkSiteKeys) return runAction(target, '检测中', async () => { const result = await api(`/api/upstreams/${target.dataset.checkSiteKeys}/keys/check`, { method: 'POST' }); await refreshAll({ quiet: true }); toast(`检测 ${result.checked} 个 Key，联通 ${result.connected}，异常 ${result.failed}`, result.failed ? 'error' : 'success'); });
   if (target.dataset.checkKey) return runAction(target, '检测中', async () => { await api(`/api/upstreams/${target.dataset.siteId}/keys/${encodeURIComponent(target.dataset.checkKey)}/check`, { method: 'POST' }); await refreshAll({ quiet: true }); toast('Key 检测完成', 'success'); });
-  if (target.dataset.toggleKey) return runAction(target, '处理中', async () => { await api(`/api/upstreams/${target.dataset.siteId}/keys/${encodeURIComponent(target.dataset.toggleKey)}`, { method: 'PUT', body: JSON.stringify({ status: target.dataset.nextStatus }) }); await refreshAll({ quiet: true }); });
+  if (target.dataset.toggleKey) return runAction(target, '处理中', async () => { await api(`/api/upstreams/${target.dataset.siteId}/keys/${encodeURIComponent(target.dataset.toggleKey)}`, { method: 'PUT', body: JSON.stringify({ status: target.dataset.nextStatus }) }); await refreshAll({ quiet: true }); toast(target.dataset.nextStatus === 'active' ? 'Key 已启用' : 'Key 已暂停', 'success'); });
   if (target.dataset.deleteKey) { if (!confirm('确定删除这个 Key？')) return; return runAction(target, '删除中', async () => { await api(`/api/upstreams/${target.dataset.siteId}/keys/${encodeURIComponent(target.dataset.deleteKey)}`, { method: 'DELETE' }); await refreshAll({ quiet: true }); toast('Key 已删除', 'success'); }); }
   if (target.dataset.syncOwnSite) return runAction(target, '同步中', async () => { await api(`/api/own-sites/${target.dataset.syncOwnSite}/sync`, { method: 'POST' }); await refreshAll({ quiet: true }); });
   if (target.dataset.editOwnSite) return openOwnSite(Number(target.dataset.editOwnSite));
@@ -671,6 +888,15 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.ackRate) { await api(`/api/rate-changes/${target.dataset.ackRate}/ack`, { method: 'POST' }); await refreshAll({ quiet: true }); return; }
   if (target.dataset.createRecharge) return runAction(target, '创建中', async () => { const result = await api(`/api/upstreams/${target.dataset.createRecharge}/recharge-orders`, { method: 'POST', body: JSON.stringify({ amount: Number(document.querySelector('#detailRechargeAmount').value), payment_type: document.querySelector('#detailRechargeMethod').value, order_type: 'balance' }) }); document.querySelector('#detailRechargeResult').innerHTML = `<div class="detail-block"><div class="detail-line"><span>订单状态</span><strong>${escapeHtml(result.order?.status || 'PENDING')}</strong></div>${result.order?.pay_url ? `<a class="btn primary" href="${escapeHtml(result.order.pay_url)}" target="_blank" rel="noreferrer">打开收银台</a>` : ''}</div>`; });
   if (target.dataset.action === 'pushplus-test') return runAction(target, '发送中', async () => { await api('/api/notifications/pushplus/test', { method: 'POST' }); toast('测试推送已发送', 'success'); });
+  if (target.dataset.action === 'pushplus-clear') {
+    if (!confirm('确定清空控制台中的 PushPlus Token？')) return;
+    return runAction(target, '清空中', async () => {
+      await api('/api/notifications/pushplus/settings', { method: 'DELETE' });
+      document.querySelector('#pushPlusTokenInput').value = '';
+      await refreshAll({ quiet: true });
+      toast('PushPlus 控制台配置已清空', 'success');
+    });
+  }
   if (target.dataset.action === 'export-config') { const data = await api('/api/export'); const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `sub2api-upstreams-${Date.now()}.json`; link.click(); URL.revokeObjectURL(url); return; }
   if (target.dataset.action === 'import-config') return document.querySelector('#importFileInput').click();
   if (target.dataset.action === 'backup-database') { window.location.href = '/api/backup/database'; return; }
