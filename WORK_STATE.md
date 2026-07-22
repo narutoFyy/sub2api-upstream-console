@@ -90,3 +90,22 @@
 ## Completion
 
 - State: `complete`
+
+## Current Goal: Multiple PushPlus Targets
+
+Status: complete
+Mode: `state-main`
+Topology: `linear`
+
+Outcome: Broadcast every alert to all enabled PushPlus targets while preserving legacy single-token and environment fallback behavior.
+
+Tasks:
+
+- T-001 encrypted target model and legacy compatibility: done
+- T-002 broadcast delivery and isolated failures: done
+- T-003 API and settings UI: done
+- T-004 tests, documentation, and final verification: done
+
+Pressure check: The environment token is used only when no database target list exists, preventing duplicate delivery after upgrade. Full tests cover legacy resolution, masked status, enabled-target fan-out, and partial failure.
+
+Evidence: `npm test` passed 59/59; JavaScript syntax checks and `git diff --check` passed. Real PushPlus delivery remains user-assisted because no production token was supplied in this task.

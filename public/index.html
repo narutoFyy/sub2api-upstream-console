@@ -193,9 +193,11 @@
               <section class="surface setting-section setting-form-section">
                 <div><h3>PushPlus</h3><p id="pushPlusSettingStatus" class="muted">未配置</p></div>
                 <form id="pushPlusForm" class="setting-inline-form">
+                  <label><span class="sr-only">PushPlus 名称</span><input id="pushPlusNameInput" name="name" type="text" autocomplete="off" placeholder="目标名称（可选）" /></label>
                   <label><span class="sr-only">PushPlus Token</span><input id="pushPlusTokenInput" name="token" type="password" autocomplete="off" placeholder="输入 PushPlus Token" /></label>
-                  <div class="button-group"><button class="btn primary" type="submit"><i data-lucide="save"></i>保存</button><button class="btn secondary" type="button" data-action="pushplus-test"><i data-lucide="send"></i>测试</button><button class="btn danger-outline" type="button" data-action="pushplus-clear"><i data-lucide="trash-2"></i>清空</button></div>
+                  <div class="button-group"><button class="btn primary" type="submit"><i data-lucide="plus"></i>添加目标</button><button class="btn secondary" type="button" data-action="pushplus-test"><i data-lucide="send"></i>测试全部</button><button class="btn danger-outline" type="button" data-action="pushplus-clear"><i data-lucide="trash-2"></i>清空全部</button></div>
                 </form>
+                <div id="pushPlusTargets" class="pushplus-target-list" aria-live="polite"></div>
               </section>
               <section class="surface runtime-setting-section">
                 <div class="section-heading"><div><h3>发送规则</h3><p class="muted">事件始终记录，开关只影响微信通知</p></div></div>

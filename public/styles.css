@@ -245,6 +245,10 @@ svg { display: block; }
 }
 .filter-row.compact { justify-content: flex-start; }
 .filter-actions, .inline-filters, .button-group { display: flex; align-items: center; gap: 10px; }
+
+.pushplus-target-list { display: grid; gap: 8px; margin-top: 14px; }
+.pushplus-target-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-subtle); }
+.pushplus-target-row .button-group { flex-wrap: nowrap; }
 .filter-actions select { width: 170px; }
 .inline-filters select { width: 180px; }
 .usage-filter-grid { display: grid; grid-template-columns: minmax(180px, 1.3fr) repeat(6, minmax(130px, 1fr)) auto; align-items: end; gap: 10px; margin-bottom: 18px; }
@@ -373,7 +377,7 @@ svg { display: block; }
 .setting-section { min-height: 100px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px; }
 .setting-section .muted { margin-top: 6px; }
 .setting-form-section { grid-column: 1 / -1; }
-.setting-inline-form { width: min(720px, 68%); display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: center; gap: 12px; }
+.setting-inline-form { width: min(980px, 100%); display: grid; grid-template-columns: minmax(160px, 0.7fr) minmax(220px, 1fr) auto; align-items: center; gap: 12px; }
 .setting-inline-form label { min-width: 0; }
 .settings-tabs { margin-bottom: 18px; }
 .settings-panel { display: grid; gap: 16px; }

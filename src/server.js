@@ -12,7 +12,7 @@ const { fetchOwnSiteRoutes } = require('./ownSiteClient');
 const { importAllKeys } = require('./keyImportService');
 const { buildUpstreamMonitoring } = require('./monitoringService');
 const { checkUpstreamKeys } = require('./keyConnectivityService');
-const { pushPlusStatus, sendPushPlus } = require('./pushPlusClient');
+const { pushPlusStatus, sendPushPlus, readPushPlusTargets, savePushPlusTargets } = require('./pushPlusClient');
 const { syncUpstreamModels } = require('./modelDiscoveryService');
 const { updateManagedKey, deleteManagedKey } = require('./keyMutationService');
 const { queryUpstreamUsage, getUpstreamUsageDetail } = require('./upstreamUsage');
@@ -261,6 +261,17 @@ const updateUpstreamKeySchema = z.object({
 const pushPlusSettingSchema = z.object({
   token: z.string().trim().min(8).max(500)
 });
+
+const pushPlusTargetSchema = z.object({
+  name: z.string().trim().max(100).optional().default(''),
+  token: z.string().trim().min(8).max(500),
+  enabled: z.boolean().optional().default(true)
+});
+
+const pushPlusTargetPatchSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  enabled: z.boolean().optional()
+}).strict();
 
 const alertAcknowledgeSchema = z.object({
   ids: z.array(z.number().int().positive()).max(1000).optional().default([])
@@ -846,6 +857,10 @@ app.get('/api/notifications/pushplus/status', (req, res) => {
   res.json(pushPlusStatus());
 });
 
+app.get('/api/notifications/pushplus/targets', (req, res) => {
+  res.json(pushPlusStatus());
+});
+
 app.get('/api/settings/runtime', (req, res) => {
   res.json(runtimeSettingsStatus());
 });
@@ -885,24 +900,78 @@ app.post('/api/system/update/apply', async (req, res, next) => {
 app.put('/api/notifications/pushplus/settings', (req, res, next) => {
   try {
     const payload = pushPlusSettingSchema.parse(req.body || {});
-    repo.setSecretSetting('pushplus_token', payload.token);
+    const targets = readPushPlusTargets();
+    if (targets.length) {
+      targets[0] = { ...targets[0], token: payload.token, enabled: true };
+      savePushPlusTargets(targets);
+    } else {
+      repo.setSecretSetting('pushplus_token', payload.token);
+    }
     res.json({ ok: true, ...pushPlusStatus() });
   } catch (err) {
     next(err);
   }
 });
 
+app.post('/api/notifications/pushplus/targets', (req, res, next) => {
+  try {
+    const payload = pushPlusTargetSchema.parse(req.body || {});
+    const targets = readPushPlusTargets();
+    if (!targets.length) {
+      const legacyToken = repo.getSecretSetting('pushplus_token');
+      if (legacyToken) targets.push({ id: crypto.randomUUID(), name: '默认目标', token: legacyToken, enabled: true });
+    }
+    targets.push({
+      id: crypto.randomUUID(),
+      name: payload.name || `目标 ${targets.length + 1}`,
+      token: payload.token,
+      enabled: payload.enabled
+    });
+    savePushPlusTargets(targets);
+    res.json({ ok: true, ...pushPlusStatus() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.patch('/api/notifications/pushplus/targets/:id', (req, res, next) => {
+  try {
+    const payload = pushPlusTargetPatchSchema.parse(req.body || {});
+    const targets = readPushPlusTargets();
+    const index = targets.findIndex((target) => target.id === String(req.params.id));
+    if (index === -1) return res.status(404).json({ error: 'Not found' });
+    targets[index] = { ...targets[index], ...payload };
+    savePushPlusTargets(targets);
+    return res.json({ ok: true, ...pushPlusStatus() });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+app.delete('/api/notifications/pushplus/targets/:id', (req, res) => {
+  const targets = readPushPlusTargets();
+  const nextTargets = targets.filter((target) => target.id !== String(req.params.id));
+  if (nextTargets.length === targets.length) return res.status(404).json({ error: 'Not found' });
+  savePushPlusTargets(nextTargets);
+  return res.json({ ok: true, ...pushPlusStatus() });
+});
+
 app.delete('/api/notifications/pushplus/settings', (req, res) => {
-  const deleted = repo.deleteSetting('pushplus_token');
+  const deletedLegacy = repo.deleteSetting('pushplus_token');
+  const deletedTargets = repo.deleteSetting('pushplus_targets');
+  const deleted = deletedLegacy || deletedTargets;
   res.json({ ok: true, deleted, ...pushPlusStatus() });
 });
 
 app.post('/api/notifications/pushplus/test', async (req, res, next) => {
   try {
+    const targetId = String(req.body?.target_id || '');
+    const target = targetId ? readPushPlusTargets().find((item) => item.id === targetId) : null;
+    if (targetId && !target) return res.status(404).json({ error: 'Not found' });
     const result = await sendPushPlus({
       title: 'Sub2API 控制台测试',
       content: `PushPlus 已成功连接。\n时间：${new Date().toISOString()}`
-    });
+    }, target ? { tokens: [target] } : {});
     res.json(result);
   } catch (err) {
     next(err);

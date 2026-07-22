@@ -78,6 +78,40 @@ test('PushPlus resolves database settings without exposing the full token', () =
   assert.equal(JSON.stringify(status).includes('database-push-token'), false);
 });
 
+test('sendPushPlus broadcasts to enabled targets and isolates failures', async () => {
+  const calls = [];
+  const result = await sendPushPlus({ title: 'Title', content: 'Body' }, {
+    tokens: [
+      { id: 'one', name: '目标一', token: 'push-token-one' },
+      { id: 'two', name: '目标二', token: 'push-token-two' },
+      { id: 'disabled', name: '停用', token: 'push-token-disabled', enabled: false }
+    ],
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body.token);
+      if (body.token === 'push-token-two') return { ok: false, status: 500, text: async () => JSON.stringify({ msg: 'failed' }) };
+      return { ok: true, status: 200, text: async () => JSON.stringify({ code: 200, msg: 'ok' }) };
+    }
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.sent, 1);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(calls, ['push-token-one', 'push-token-two']);
+});
+
+test('PushPlus status lists masked database targets without exposing tokens', () => {
+  const targets = JSON.stringify([
+    { id: 'one', name: '主账号', token: 'database-push-token-one', enabled: true },
+    { id: 'two', name: '值班群', token: 'database-push-token-two', enabled: false }
+  ]);
+  const repository = { getSecretSetting: (key) => key === 'pushplus_targets' ? targets : '' };
+  const status = pushPlusStatus({ repo: repository });
+  assert.equal(status.configured, true);
+  assert.equal(status.target_count, 2);
+  assert.equal(status.targets[1].enabled, false);
+  assert.equal(JSON.stringify(status).includes('database-push-token-one'), false);
+});
+
 test('Key incident notifies once at threshold and once after recovery', async () => {
   const repository = alertRepository();
   const messages = [];
