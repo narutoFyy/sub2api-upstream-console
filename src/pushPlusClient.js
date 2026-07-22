@@ -1,8 +1,36 @@
 const config = require('./config');
 const repo = require('./repository');
 const crypto = require('node:crypto');
+const { maskSecret } = require('./crypto');
 
 const PUSHPLUS_TARGETS_KEY = 'pushplus_targets';
+
+function endpointHost(baseUrl) {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return '未配置地址';
+  }
+}
+
+function summarizePushPlusResponse(value) {
+  const raw = String(value || '');
+  if (!raw) return '';
+  const isHtml = /<\s*\/?[a-z][^>]*>/i.test(raw);
+  const text = raw
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (isHtml && /cloudflare|error code\s*5\d\d|bad gateway/i.test(text)) {
+    return '接口返回网关错误页，请检查 PushPlus 接口地址或稍后重试';
+  }
+  if (isHtml) return '接口返回了非预期页面，请检查 PushPlus 接口地址';
+  return text.slice(0, 240);
+}
 
 class PushPlusError extends Error {
   constructor(message, status = 502) {
@@ -93,10 +121,12 @@ function pushPlusStatus(dependencies = {}) {
       id: target.id,
       name: target.name,
       enabled: target.enabled !== false,
-      token_masked: target.source === 'environment' ? '环境变量已设置' : target.token.replace(/^(...).*(...)$/, '$1...$2'),
-      legacy: Boolean(target.legacy)
+      token_masked: target.source === 'environment' ? '环境变量已设置' : maskSecret(target.token),
+      legacy: Boolean(target.legacy),
+      editable: target.source !== 'environment'
     })),
-    base_url: config.pushPlusBaseUrl
+    base_url: config.pushPlusBaseUrl,
+    endpoint_host: endpointHost(config.pushPlusBaseUrl)
   };
 }
 
@@ -105,8 +135,7 @@ async function sendPushPlus({ title, content }, dependencies = {}) {
   const baseUrl = dependencies.baseUrl ?? config.pushPlusBaseUrl;
   const fetchImpl = dependencies.fetchImpl || fetch;
   if (!targets.length) throw new PushPlusError('PushPlus Token 未配置', 422);
-  const results = [];
-  for (const target of targets) {
+  const results = await Promise.all(targets.map(async (target) => {
     try {
       const response = await fetchImpl(baseUrl, {
         method: 'POST',
@@ -116,19 +145,31 @@ async function sendPushPlus({ title, content }, dependencies = {}) {
       });
       const text = await response.text();
       let data = null;
-      try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text }; }
+      let parseFailed = false;
+      try { data = text ? JSON.parse(text) : {}; } catch { parseFailed = true; data = {}; }
       const code = Number(data?.code);
-      if (!response.ok || (Number.isFinite(code) && ![0, 200].includes(code))) {
-        throw new PushPlusError(`PushPlus 推送失败：${data?.msg || data?.message || response.status}`, response.status || 502);
+      if (!response.ok || parseFailed || (Number.isFinite(code) && ![0, 200].includes(code))) {
+        const status = response.ok ? (Number.isFinite(code) ? code : 502) : response.status;
+        const detail = summarizePushPlusResponse(parseFailed ? text : (data?.msg || data?.message || text));
+        throw new PushPlusError(
+          `PushPlus 推送失败（HTTP ${status}，接口 ${endpointHost(baseUrl)}）${detail ? `：${detail}` : ''}`,
+          status || 502
+        );
       }
-      results.push({ id: target.id, name: target.name, ok: true, code: Number.isFinite(code) ? code : null, message: data?.msg || data?.message || '已发送' });
+      return { id: target.id, name: target.name, ok: true, code: Number.isFinite(code) ? code : null, message: data?.msg || data?.message || '已发送' };
     } catch (error) {
-      results.push({ id: target.id, name: target.name, ok: false, error: error.message });
+      return {
+        id: target.id,
+        name: target.name,
+        ok: false,
+        error: summarizePushPlusResponse(error.message) || 'PushPlus 请求失败',
+        status: Number(error.status) || 502
+      };
     }
-  }
+  }));
   const sent = results.filter((item) => item.ok).length;
   const failed = results.length - sent;
-  if (!sent) throw new PushPlusError(results[0]?.error || 'PushPlus 推送失败', 502);
+  if (!sent) throw new PushPlusError(results[0]?.error || 'PushPlus 推送失败', results[0]?.status || 502);
   return { ok: true, sent, failed, results };
 }
 

@@ -60,6 +60,17 @@ function syncErrorPresentation(value) {
   };
 }
 
+function apiErrorMessage(value, status) {
+  const raw = String(value ?? '');
+  const presentation = syncErrorPresentation(raw);
+  const hasHtml = /<\s*\/?[a-z][^>]*>/i.test(raw);
+  const isGatewayError = /cloudflare|error code\s*5\d\d|bad gateway|gateway timeout/i.test(presentation.full);
+  const prefix = `请求失败（HTTP ${status}）`;
+  if (hasHtml && (isGatewayError || status >= 500)) return `${prefix}：网关暂时不可用，请稍后重试`;
+  if (hasHtml) return `${prefix}：服务返回了异常页面，请稍后重试`;
+  return presentation.summary || prefix;
+}
+
 function refreshIcons() {
   if (window.lucide?.createIcons) window.lucide.createIcons({ attrs: { 'aria-hidden': 'true' } });
 }
@@ -86,12 +97,16 @@ async function api(path, options = {}) {
   });
   const text = await response.text();
   let data = null;
-  try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text || `HTTP ${response.status}` }; }
+  let parseFailed = false;
+  try { data = text ? JSON.parse(text) : {}; } catch { parseFailed = true; data = {}; }
+  const errorMessage = !response.ok
+    ? apiErrorMessage(parseFailed ? text : (data?.error || data?.message || text), response.status)
+    : '';
   if (response.status === 401) {
     showLogin();
-    throw new Error(data.error || '请先登录控制台');
+    throw new Error(errorMessage || '请先登录控制台');
   }
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(errorMessage || `HTTP ${response.status}`);
   return data;
 }
 
@@ -491,27 +506,92 @@ function renderLogs() {
 }
 
 function renderPushPlus() {
-  const configured = Boolean(state.monitoring.pushplus?.configured);
-  const source = state.monitoring.pushplus?.source;
+  const pushplus = state.monitoring.pushplus || {};
+  const configured = Boolean(pushplus.configured);
+  const source = pushplus.source;
   const badge = document.querySelector('#pushPlusBadge');
   badge.innerHTML = `<span class="status-dot ${configured ? 'healthy' : 'neutral'}"></span><span>PushPlus ${configured ? '已连接' : '未配置'}</span>`;
   const statusText = !configured
     ? '未配置'
     : source === 'database'
-      ? `控制台配置 · ${state.monitoring.pushplus.token_masked || '已加密保存'}`
+      ? `控制台配置 · ${Number(pushplus.target_count || 0)} 个目标`
       : '环境变量配置';
   document.querySelector('#pushPlusSettingStatus').textContent = statusText;
-  const targets = state.monitoring.pushplus?.targets || [];
-  const targetList = document.querySelector('#pushPlusTargets');
-  if (targetList) {
-    targetList.innerHTML = targets.length
-      ? targets.map((target) => `<div class="pushplus-target-row"><div class="cell-stack"><strong>${escapeHtml(target.name)}</strong><small>${escapeHtml(target.token_masked)}${target.legacy ? ' · 兼容配置' : ''}</small></div><div class="button-group">${target.legacy || target.token_masked === '环境变量已设置' ? '' : `<button class="icon-btn" type="button" data-pushplus-test="${escapeHtml(target.id)}" title="测试此目标"><i data-lucide="send"></i></button><button class="icon-btn" type="button" data-pushplus-toggle="${escapeHtml(target.id)}" data-next-enabled="${target.enabled ? 'false' : 'true'}" title="${target.enabled ? '停用' : '启用'}"><i data-lucide="${target.enabled ? 'pause' : 'play'}"></i></button><button class="icon-btn danger" type="button" data-pushplus-delete="${escapeHtml(target.id)}" title="删除"><i data-lucide="trash-2"></i></button>`}</div></div>`).join('')
-      : '<div class="empty-state">还没有 PushPlus 目标</div>';
-  }
+  const targets = pushplus.targets || [];
+  const enabledCount = targets.filter((target) => target.enabled).length;
+  const summary = document.querySelector('#pushPlusTargetSummary');
+  summary.className = `status-pill ${enabledCount ? 'healthy' : 'neutral'}`;
+  summary.innerHTML = `<span class="status-dot ${enabledCount ? 'healthy' : 'neutral'}"></span>${enabledCount ? `已启用 ${enabledCount} / ${targets.length} 个目标` : '暂无启用目标'}`;
+  document.querySelector('#pushPlusEndpointText').textContent = pushplus.endpoint_host ? `接口：${pushplus.endpoint_host}` : '';
+  const rows = document.querySelector('#pushPlusTargetRows');
+  rows.innerHTML = targets.length
+    ? targets.map((target) => {
+      const managed = target.editable !== false;
+      const detail = target.legacy
+        ? '旧单 Token 配置，首次编辑会迁移到目标列表'
+        : managed ? '接收全部告警' : '环境变量兜底；在部署配置中修改';
+      const actions = managed
+        ? `<button class="icon-btn" type="button" data-pushplus-test="${escapeHtml(target.id)}" title="测试此目标" aria-label="测试 ${escapeHtml(target.name)}"><i data-lucide="send"></i></button><button class="icon-btn" type="button" data-pushplus-edit="${escapeHtml(target.id)}" title="编辑目标" aria-label="编辑 ${escapeHtml(target.name)}"><i data-lucide="pencil"></i></button><button class="icon-btn" type="button" data-pushplus-toggle="${escapeHtml(target.id)}" data-next-enabled="${target.enabled ? 'false' : 'true'}" title="${target.enabled ? '停用' : '启用'}" aria-label="${target.enabled ? '停用' : '启用'} ${escapeHtml(target.name)}"><i data-lucide="${target.enabled ? 'pause' : 'play'}"></i></button><button class="icon-btn danger" type="button" data-pushplus-delete="${escapeHtml(target.id)}" title="删除目标" aria-label="删除 ${escapeHtml(target.name)}"><i data-lucide="trash-2"></i></button>`
+        : '<span class="muted">环境变量</span>';
+      return `<tr class="${target.enabled ? '' : 'is-disabled'}"><td><div class="cell-stack"><strong>${escapeHtml(target.name)}</strong><small>${detail}</small></div></td><td><code class="pushplus-token-mask">${escapeHtml(target.token_masked)}</code></td><td><span class="status-pill ${target.enabled ? 'healthy' : 'neutral'}"><span class="status-dot ${target.enabled ? 'healthy' : 'neutral'}"></span>${target.enabled ? '已启用' : '已停用'}</span></td><td class="align-right"><div class="row-actions">${actions}</div></td></tr>`;
+    }).join('')
+    : '<tr><td colspan="4"><div class="empty-state">还没有通知目标</div></td></tr>';
   const count = Number(state.monitoring.open_alerts || 0);
   const countEl = document.querySelector('#sidebarAlertCount');
   countEl.hidden = !count;
   countEl.textContent = count > 99 ? '99+' : count;
+}
+
+function setPushPlusFeedback(message = '', tone = '') {
+  const feedback = document.querySelector('#pushPlusTestFeedback');
+  feedback.hidden = !message;
+  feedback.className = `pushplus-test-feedback ${tone}`.trim();
+  feedback.textContent = message;
+}
+
+function setPushPlusSubmitButton(icon, label) {
+  const submit = document.querySelector('#pushPlusForm button[type="submit"]');
+  submit.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`;
+}
+
+function resetPushPlusEditor() {
+  const form = document.querySelector('#pushPlusForm');
+  form.reset();
+  document.querySelector('#pushPlusTargetIdInput').value = '';
+  document.querySelector('#pushPlusEnabledInput').checked = true;
+  document.querySelector('#pushPlusEditorTitle').textContent = '添加通知目标';
+  document.querySelector('#pushPlusEditorHint').textContent = '保存后，所有启用目标都会收到同一批告警。';
+  document.querySelector('#pushPlusTokenLabel').textContent = 'PushPlus Token';
+  document.querySelector('#pushPlusTokenInput').placeholder = '输入 PushPlus Token';
+  setPushPlusSubmitButton('plus', '添加目标');
+  document.querySelector('#pushPlusCancelEdit').hidden = true;
+  setPushPlusFeedback();
+  refreshIcons();
+}
+
+function openPushPlusEditor(id) {
+  const target = (state.monitoring.pushplus?.targets || []).find((item) => item.id === id);
+  if (!target) return;
+  document.querySelector('#pushPlusTargetIdInput').value = target.id;
+  document.querySelector('#pushPlusNameInput').value = target.name;
+  document.querySelector('#pushPlusTokenInput').value = '';
+  document.querySelector('#pushPlusEnabledInput').checked = Boolean(target.enabled);
+  document.querySelector('#pushPlusEditorTitle').textContent = `编辑：${target.name}`;
+  document.querySelector('#pushPlusEditorHint').textContent = 'Token 留空时会保留当前值。';
+  document.querySelector('#pushPlusTokenLabel').textContent = '新的 PushPlus Token（可选）';
+  document.querySelector('#pushPlusTokenInput').placeholder = '留空则不修改当前 Token';
+  setPushPlusSubmitButton('save', '保存修改');
+  document.querySelector('#pushPlusCancelEdit').hidden = false;
+  setPushPlusFeedback();
+  refreshIcons();
+  document.querySelector('#pushPlusNameInput').focus();
+}
+
+function pushPlusDeliverySummary(result, targetName = '') {
+  const failed = (result.results || []).filter((item) => !item.ok);
+  if (!failed.length) return { message: targetName ? `${targetName} 测试推送已发送` : `已向 ${result.sent || 0} 个目标发送测试推送`, tone: 'success' };
+  const details = failed.map((item) => `${item.name}：${item.error}`).join('；');
+  return { message: `已发送 ${result.sent || 0} 个目标，${failed.length} 个失败。${details}`, tone: 'error' };
 }
 
 function renderCurrentView() {
@@ -716,6 +796,7 @@ function fillUpstreamForm(detail = null) {
 }
 
 function probeSourceText(item) {
+  if (item.discovery_status === 'pricing') return '模型广场';
   if (item.discovery_status === 'live') return '模型接口';
   if (item.discovery_status === 'usage') return '近期使用记录';
   if (item.discovery_status === 'manual_only') return '手动配置';
@@ -929,17 +1010,25 @@ document.querySelector('#acknowledgeVisibleAlertsBtn').addEventListener('click',
 
 document.querySelector('#pushPlusForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const targetId = document.querySelector('#pushPlusTargetIdInput').value;
   const tokenInput = document.querySelector('#pushPlusTokenInput');
   const nameInput = document.querySelector('#pushPlusNameInput');
+  const enabledInput = document.querySelector('#pushPlusEnabledInput');
   const token = tokenInput.value.trim();
-  if (!token) return toast('请输入 PushPlus Token', 'error');
+  const name = nameInput.value.trim();
+  if (!name) return toast('请输入目标名称', 'error');
+  if (!targetId && !token) return toast('请输入 PushPlus Token', 'error');
   const submit = event.currentTarget.querySelector('button[type="submit"]');
   await runAction(submit, '保存中', async () => {
-    await api('/api/notifications/pushplus/targets', { method: 'POST', body: JSON.stringify({ token, name: nameInput.value.trim() }) });
-    tokenInput.value = '';
-    nameInput.value = '';
+    const payload = { name, enabled: enabledInput.checked };
+    if (token) payload.token = token;
+    await api(
+      targetId ? `/api/notifications/pushplus/targets/${encodeURIComponent(targetId)}` : '/api/notifications/pushplus/targets',
+      { method: targetId ? 'PATCH' : 'POST', body: JSON.stringify(payload) }
+    );
+    resetPushPlusEditor();
     await refreshAll({ quiet: true });
-    toast('PushPlus 配置已保存', 'success');
+    toast(targetId ? '通知目标已更新' : '通知目标已添加', 'success');
   });
 });
 
@@ -971,7 +1060,7 @@ document.querySelector('#syncProbeModelsBtn').addEventListener('click', async (e
   if (!siteId) throw new Error('请先保存上游');
   const result = await api(`/api/upstreams/${siteId}/models/sync`, { method: 'POST' });
   renderProbeModels(result.items || []);
-  toast(`模型同步完成：接口 ${result.live_groups}，使用记录 ${result.fallback_groups}，保留缓存 ${result.stale_groups || 0}`, 'success');
+  toast(`模型同步完成：模型广场 ${result.pricing_groups || 0}，接口 ${result.live_groups}，使用记录 ${result.fallback_groups}，保留缓存 ${result.stale_groups || 0}`, 'success');
 }));
 
 document.querySelector('#probeModelGroups').addEventListener('change', async (event) => {
@@ -1123,17 +1212,30 @@ document.addEventListener('click', async (event) => {
     });
   }
   if (target.dataset.createRecharge) return runAction(target, '创建中', async () => { const result = await api(`/api/upstreams/${target.dataset.createRecharge}/recharge-orders`, { method: 'POST', body: JSON.stringify({ amount: Number(document.querySelector('#detailRechargeAmount').value), payment_type: document.querySelector('#detailRechargeMethod').value, order_type: 'balance' }) }); document.querySelector('#detailRechargeResult').innerHTML = `<div class="detail-block"><div class="detail-line"><span>订单状态</span><strong>${escapeHtml(result.order?.status || 'PENDING')}</strong></div>${result.order?.pay_url ? `<a class="btn primary" href="${escapeHtml(result.order.pay_url)}" target="_blank" rel="noreferrer">打开收银台</a>` : ''}</div>`; });
-  if (target.dataset.action === 'pushplus-test') return runAction(target, '发送中', async () => { await api('/api/notifications/pushplus/test', { method: 'POST' }); toast('测试推送已发送', 'success'); });
-  if (target.dataset.pushplusTest) return runAction(target, '发送中', async () => { await api('/api/notifications/pushplus/test', { method: 'POST', body: JSON.stringify({ target_id: target.dataset.pushplusTest }) }); toast('测试推送已发送', 'success'); });
+  if (target.dataset.action === 'pushplus-test') return runAction(target, '发送中', async () => {
+    const result = await api('/api/notifications/pushplus/test', { method: 'POST' });
+    const summary = pushPlusDeliverySummary(result);
+    setPushPlusFeedback(summary.message, summary.tone);
+    toast(summary.message, summary.tone);
+  });
+  if (target.dataset.pushplusTest) return runAction(target, '发送中', async () => {
+    const targetInfo = (state.monitoring.pushplus?.targets || []).find((item) => item.id === target.dataset.pushplusTest);
+    const result = await api('/api/notifications/pushplus/test', { method: 'POST', body: JSON.stringify({ target_id: target.dataset.pushplusTest }) });
+    const summary = pushPlusDeliverySummary(result, targetInfo?.name || '该目标');
+    setPushPlusFeedback(summary.message, summary.tone);
+    toast(summary.message, summary.tone);
+  });
+  if (target.dataset.pushplusEdit) return openPushPlusEditor(target.dataset.pushplusEdit);
+  if (target.dataset.action === 'pushplus-cancel-edit') return resetPushPlusEditor();
   if (target.dataset.pushplusToggle) return runAction(target, '保存中', async () => { await api(`/api/notifications/pushplus/targets/${encodeURIComponent(target.dataset.pushplusToggle)}`, { method: 'PATCH', body: JSON.stringify({ enabled: target.dataset.nextEnabled === 'true' }) }); await refreshAll({ quiet: true }); toast(target.dataset.nextEnabled === 'true' ? '目标已启用' : '目标已停用', 'success'); });
-  if (target.dataset.pushplusDelete) { if (!confirm('确定删除这个 PushPlus 目标？')) return; return runAction(target, '删除中', async () => { await api(`/api/notifications/pushplus/targets/${encodeURIComponent(target.dataset.pushplusDelete)}`, { method: 'DELETE' }); await refreshAll({ quiet: true }); toast('目标已删除', 'success'); }); }
+  if (target.dataset.pushplusDelete) { if (!confirm('确定删除这个 PushPlus 目标？')) return; return runAction(target, '删除中', async () => { await api(`/api/notifications/pushplus/targets/${encodeURIComponent(target.dataset.pushplusDelete)}`, { method: 'DELETE' }); if (document.querySelector('#pushPlusTargetIdInput').value === target.dataset.pushplusDelete) resetPushPlusEditor(); await refreshAll({ quiet: true }); toast('目标已删除', 'success'); }); }
   if (target.dataset.action === 'pushplus-clear') {
-    if (!confirm('确定清空控制台中的 PushPlus Token？')) return;
+    if (!confirm('确定清空所有控制台中的 PushPlus 通知目标？')) return;
     return runAction(target, '清空中', async () => {
       await api('/api/notifications/pushplus/settings', { method: 'DELETE' });
-      document.querySelector('#pushPlusTokenInput').value = '';
+      resetPushPlusEditor();
       await refreshAll({ quiet: true });
-      toast('PushPlus 控制台配置已清空', 'success');
+      toast('PushPlus 通知目标已清空', 'success');
     });
   }
   if (target.dataset.action === 'check-system-update') return runAction(target, '检查中', async () => {

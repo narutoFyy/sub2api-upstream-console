@@ -190,14 +190,29 @@
             </div>
 
             <div class="settings-panel" data-settings-panel="notifications">
-              <section class="surface setting-section setting-form-section">
-                <div><h3>PushPlus</h3><p id="pushPlusSettingStatus" class="muted">未配置</p></div>
-                <form id="pushPlusForm" class="setting-inline-form">
-                  <label><span class="sr-only">PushPlus 名称</span><input id="pushPlusNameInput" name="name" type="text" autocomplete="off" placeholder="目标名称（可选）" /></label>
-                  <label><span class="sr-only">PushPlus Token</span><input id="pushPlusTokenInput" name="token" type="password" autocomplete="off" placeholder="输入 PushPlus Token" /></label>
-                  <div class="button-group"><button class="btn primary" type="submit"><i data-lucide="plus"></i>添加目标</button><button class="btn secondary" type="button" data-action="pushplus-test"><i data-lucide="send"></i>测试全部</button><button class="btn danger-outline" type="button" data-action="pushplus-clear"><i data-lucide="trash-2"></i>清空全部</button></div>
+              <section class="surface runtime-setting-section pushplus-manager">
+                <div class="section-heading">
+                  <div><h3>PushPlus 通知目标</h3><p id="pushPlusSettingStatus" class="muted">未配置</p></div>
+                  <div class="button-group"><button class="btn secondary" type="button" data-action="pushplus-test"><i data-lucide="send"></i>测试全部</button><button class="btn danger-outline" type="button" data-action="pushplus-clear"><i data-lucide="trash-2"></i>清空全部</button></div>
+                </div>
+                <div class="pushplus-summary" aria-live="polite"><span id="pushPlusTargetSummary" class="status-pill neutral">暂无启用目标</span><span id="pushPlusEndpointText" class="muted"></span></div>
+                <div class="table-scroll pushplus-table-scroll">
+                  <table class="data-table pushplus-target-table">
+                    <thead><tr><th>目标</th><th>Token</th><th>状态</th><th class="align-right">操作</th></tr></thead>
+                    <tbody id="pushPlusTargetRows"></tbody>
+                  </table>
+                </div>
+                <form id="pushPlusForm" class="pushplus-editor">
+                  <div class="pushplus-editor-heading"><div><h3 id="pushPlusEditorTitle">添加通知目标</h3><p id="pushPlusEditorHint" class="muted">保存后，所有启用目标都会收到同一批告警。</p></div></div>
+                  <input id="pushPlusTargetIdInput" name="target_id" type="hidden" />
+                  <div class="pushplus-editor-grid">
+                    <label class="setting-field"><span>目标名称</span><input id="pushPlusNameInput" name="name" type="text" autocomplete="off" maxlength="100" placeholder="例如：主账号、值班群" /></label>
+                    <label class="setting-field"><span id="pushPlusTokenLabel">PushPlus Token</span><input id="pushPlusTokenInput" name="token" type="password" autocomplete="off" minlength="8" maxlength="500" placeholder="输入 PushPlus Token" /></label>
+                    <label class="toggle-field pushplus-enabled-toggle"><input id="pushPlusEnabledInput" name="enabled" type="checkbox" checked /><span class="toggle-control"></span><span>保存后启用</span></label>
+                  </div>
+                  <div class="pushplus-editor-actions"><button class="btn primary" type="submit"><i data-lucide="plus"></i><span>添加目标</span></button><button id="pushPlusCancelEdit" class="btn secondary" type="button" data-action="pushplus-cancel-edit" hidden>取消编辑</button></div>
+                  <p id="pushPlusTestFeedback" class="pushplus-test-feedback" hidden></p>
                 </form>
-                <div id="pushPlusTargets" class="pushplus-target-list" aria-live="polite"></div>
               </section>
               <section class="surface runtime-setting-section">
                 <div class="section-heading"><div><h3>发送规则</h3><p class="muted">事件始终记录，开关只影响微信通知</p></div></div>

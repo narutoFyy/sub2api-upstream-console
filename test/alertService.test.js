@@ -1,6 +1,7 @@
 require('./testEnv');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const config = require('../src/config');
 const { pushPlusStatus, resolvePushPlusToken, sendPushPlus } = require('../src/pushPlusClient');
 const {
   evaluateKeyConnectivity,
@@ -99,6 +100,29 @@ test('sendPushPlus broadcasts to enabled targets and isolates failures', async (
   assert.deepEqual(calls, ['push-token-one', 'push-token-two']);
 });
 
+test('sendPushPlus starts all enabled targets without waiting for the first response', async () => {
+  const calls = [];
+  let resolveFirst;
+  const firstResponse = new Promise((resolve) => { resolveFirst = resolve; });
+  const delivery = sendPushPlus({ title: 'Title', content: 'Body' }, {
+    tokens: [
+      { id: 'one', name: '目标一', token: 'push-token-one' },
+      { id: 'two', name: '目标二', token: 'push-token-two' }
+    ],
+    fetchImpl: (_url, options) => {
+      const token = JSON.parse(options.body).token;
+      calls.push(token);
+      if (token === 'push-token-one') return firstResponse;
+      return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, msg: 'ok' }) });
+    }
+  });
+
+  assert.deepEqual(calls, ['push-token-one', 'push-token-two']);
+  resolveFirst({ ok: true, status: 200, text: async () => JSON.stringify({ code: 200, msg: 'ok' }) });
+  const result = await delivery;
+  assert.equal(result.sent, 2);
+});
+
 test('PushPlus status lists masked database targets without exposing tokens', () => {
   const targets = JSON.stringify([
     { id: 'one', name: '主账号', token: 'database-push-token-one', enabled: true },
@@ -109,7 +133,98 @@ test('PushPlus status lists masked database targets without exposing tokens', ()
   assert.equal(status.configured, true);
   assert.equal(status.target_count, 2);
   assert.equal(status.targets[1].enabled, false);
+  assert.equal(status.targets[0].editable, true);
   assert.equal(JSON.stringify(status).includes('database-push-token-one'), false);
+});
+
+test('PushPlus marks an environment-variable fallback target as non-editable', () => {
+  const originalToken = config.pushPlusToken;
+  config.pushPlusToken = 'environment-push-token';
+  try {
+    const status = pushPlusStatus({ repo: { getSecretSetting: () => '' } });
+    assert.equal(status.targets[0].token_masked, '环境变量已设置');
+    assert.equal(status.targets[0].editable, false);
+  } finally {
+    config.pushPlusToken = originalToken;
+  }
+});
+
+test('PushPlus reduces HTML gateway responses to a safe actionable error', async () => {
+  await assert.rejects(
+    sendPushPlus({ title: 'Title', content: 'Body' }, {
+      token: 'push-token',
+      baseUrl: 'https://con.shitoutk.com/send',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 502,
+        text: async () => '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body>Cloudflare Host Error 43.229.133.135</body></html>'
+      })
+    }),
+    (error) => {
+      assert.match(error.message, /HTTP 502/);
+      assert.match(error.message, /con\.shitoutk\.com/);
+      assert.match(error.message, /网关错误页/);
+      assert.equal(error.message.includes('<html'), false);
+      assert.equal(error.message.includes('43.229.133.135'), false);
+      return true;
+    }
+  );
+});
+
+test('PushPlus recognizes a truncated Cloudflare gateway page', async () => {
+  await assert.rejects(
+    sendPushPlus({ title: 'Title', content: 'Body' }, {
+      token: 'push-token',
+      baseUrl: 'https://con.shitoutk.com/send',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 502,
+        text: async () => '<span class="code-label">Error code 502</span><div>Visit cloudflare.com for more information.</div>'
+      })
+    }),
+    (error) => {
+      assert.match(error.message, /网关错误页/);
+      assert.equal(error.message.includes('<span'), false);
+      return true;
+    }
+  );
+});
+
+test('PushPlus rejects a 200 HTML gateway page instead of reporting delivery success', async () => {
+  await assert.rejects(
+    sendPushPlus({ title: 'Title', content: 'Body' }, {
+      token: 'push-token',
+      baseUrl: 'https://con.shitoutk.com/send',
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '<span class="code-label">Error code 502</span><div>Cloudflare</div>'
+      })
+    }),
+    (error) => {
+      assert.equal(error.status, 502);
+      assert.match(error.message, /网关错误页/);
+      return true;
+    }
+  );
+});
+
+test('PushPlus preserves the upstream status when every target fails', async () => {
+  await assert.rejects(
+    sendPushPlus({ title: 'Title', content: 'Body' }, {
+      token: 'push-token',
+      fetchImpl: async () => ({
+        ok: false,
+        status: 401,
+        text: async () => JSON.stringify({ msg: 'token invalid' })
+      })
+    }),
+    (error) => {
+      assert.equal(error.status, 401);
+      assert.match(error.message, /HTTP 401/);
+      return true;
+    }
+  );
 });
 
 test('Key incident notifies once at threshold and once after recovery', async () => {

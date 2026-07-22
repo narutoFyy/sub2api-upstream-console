@@ -12,7 +12,7 @@ const { fetchOwnSiteRoutes } = require('./ownSiteClient');
 const { importAllKeys } = require('./keyImportService');
 const { buildUpstreamMonitoring } = require('./monitoringService');
 const { checkUpstreamKeys } = require('./keyConnectivityService');
-const { pushPlusStatus, sendPushPlus, readPushPlusTargets, savePushPlusTargets } = require('./pushPlusClient');
+const { pushPlusStatus, sendPushPlus, readPushPlusTargets, savePushPlusTargets, PUSHPLUS_TARGETS_KEY } = require('./pushPlusClient');
 const { syncUpstreamModels } = require('./modelDiscoveryService');
 const { updateManagedKey, deleteManagedKey } = require('./keyMutationService');
 const { queryUpstreamUsage, getUpstreamUsageDetail } = require('./upstreamUsage');
@@ -270,6 +270,7 @@ const pushPlusTargetSchema = z.object({
 
 const pushPlusTargetPatchSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
+  token: z.string().trim().min(8).max(500).optional(),
   enabled: z.boolean().optional()
 }).strict();
 
@@ -853,6 +854,27 @@ app.post('/api/alerts/:id/acknowledge', (req, res) => {
   return res.json({ ok: true, item });
 });
 
+function editablePushPlusTargets() {
+  const targets = readPushPlusTargets();
+  if (targets.length) return { targets, usesLegacySetting: false };
+  const legacyToken = repo.getSecretSetting('pushplus_token');
+  if (!legacyToken) return { targets: [], usesLegacySetting: false };
+  return {
+    targets: [{ id: 'legacy', name: '默认目标', token: legacyToken, enabled: true }],
+    usesLegacySetting: true
+  };
+}
+
+function persistEditablePushPlusTargets(targets) {
+  if (!targets.length) {
+    repo.deleteSetting(PUSHPLUS_TARGETS_KEY);
+    repo.deleteSetting('pushplus_token');
+    return;
+  }
+  savePushPlusTargets(targets);
+  repo.deleteSetting('pushplus_token');
+}
+
 app.get('/api/notifications/pushplus/status', (req, res) => {
   res.json(pushPlusStatus());
 });
@@ -916,18 +938,15 @@ app.put('/api/notifications/pushplus/settings', (req, res, next) => {
 app.post('/api/notifications/pushplus/targets', (req, res, next) => {
   try {
     const payload = pushPlusTargetSchema.parse(req.body || {});
-    const targets = readPushPlusTargets();
-    if (!targets.length) {
-      const legacyToken = repo.getSecretSetting('pushplus_token');
-      if (legacyToken) targets.push({ id: crypto.randomUUID(), name: '默认目标', token: legacyToken, enabled: true });
-    }
+    const { targets, usesLegacySetting } = editablePushPlusTargets();
+    if (usesLegacySetting) targets[0].id = crypto.randomUUID();
     targets.push({
       id: crypto.randomUUID(),
       name: payload.name || `目标 ${targets.length + 1}`,
       token: payload.token,
       enabled: payload.enabled
     });
-    savePushPlusTargets(targets);
+    persistEditablePushPlusTargets(targets);
     res.json({ ok: true, ...pushPlusStatus() });
   } catch (err) {
     next(err);
@@ -937,11 +956,11 @@ app.post('/api/notifications/pushplus/targets', (req, res, next) => {
 app.patch('/api/notifications/pushplus/targets/:id', (req, res, next) => {
   try {
     const payload = pushPlusTargetPatchSchema.parse(req.body || {});
-    const targets = readPushPlusTargets();
+    const { targets, usesLegacySetting } = editablePushPlusTargets();
     const index = targets.findIndex((target) => target.id === String(req.params.id));
     if (index === -1) return res.status(404).json({ error: 'Not found' });
-    targets[index] = { ...targets[index], ...payload };
-    savePushPlusTargets(targets);
+    targets[index] = { ...targets[index], ...payload, id: usesLegacySetting ? crypto.randomUUID() : targets[index].id };
+    persistEditablePushPlusTargets(targets);
     return res.json({ ok: true, ...pushPlusStatus() });
   } catch (err) {
     return next(err);
@@ -949,10 +968,10 @@ app.patch('/api/notifications/pushplus/targets/:id', (req, res, next) => {
 });
 
 app.delete('/api/notifications/pushplus/targets/:id', (req, res) => {
-  const targets = readPushPlusTargets();
+  const { targets } = editablePushPlusTargets();
   const nextTargets = targets.filter((target) => target.id !== String(req.params.id));
   if (nextTargets.length === targets.length) return res.status(404).json({ error: 'Not found' });
-  savePushPlusTargets(nextTargets);
+  persistEditablePushPlusTargets(nextTargets);
   return res.json({ ok: true, ...pushPlusStatus() });
 });
 
@@ -966,7 +985,7 @@ app.delete('/api/notifications/pushplus/settings', (req, res) => {
 app.post('/api/notifications/pushplus/test', async (req, res, next) => {
   try {
     const targetId = String(req.body?.target_id || '');
-    const target = targetId ? readPushPlusTargets().find((item) => item.id === targetId) : null;
+    const target = targetId ? editablePushPlusTargets().targets.find((item) => item.id === targetId) : null;
     if (targetId && !target) return res.status(404).json({ error: 'Not found' });
     const result = await sendPushPlus({
       title: 'Sub2API 控制台测试',
