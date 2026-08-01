@@ -12,6 +12,34 @@ function rechargeSummary(snapshot) {
   return `recharge=1 RMB->${multiplier} balance`;
 }
 
+function fetchArguments(site, credentials, tokenOverride = '') {
+  return {
+    baseUrl: site.base_url,
+    upstreamType: site.upstream_type || 'auto',
+    email: credentials.email,
+    password: credentials.password,
+    token: tokenOverride || credentials.token,
+    refreshToken: credentials.refresh_token,
+    tokenExpiresAt: credentials.token_expires_at
+  };
+}
+
+async function fetchConfirmedState(site, credentials, dependencies = {}) {
+  const fetchState = dependencies.fetchUpstreamState || fetchSub2APIState;
+  const first = await fetchState(fetchArguments(site, credentials));
+  if (Number(first?.snapshot?.balance) !== 0) return first;
+
+  const delay = dependencies.delay || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  await delay(Number(dependencies.zeroBalanceRetryDelayMs ?? 5000));
+  try {
+    return await fetchState(fetchArguments(site, credentials, first.token));
+  } catch (error) {
+    const retryError = new Error(`余额首次返回 0，复查失败，已保留上一有效余额：${error.message}`);
+    retryError.cause = error;
+    throw retryError;
+  }
+}
+
 async function syncSite(siteId, dependencies = {}) {
   const repository = dependencies.repo || repo;
   const settings = dependencies.settings || runtimeSettingsStatus({ repository }).settings;
@@ -22,15 +50,7 @@ async function syncSite(siteId, dependencies = {}) {
   const creds = repository.getCredentials(siteId) || {};
   const startedAt = nowIso();
   try {
-    const result = await fetchSub2APIState({
-      baseUrl: site.base_url,
-      upstreamType: site.upstream_type || 'auto',
-      email: creds.email,
-      password: creds.password,
-      token: creds.token,
-      refreshToken: creds.refresh_token,
-      tokenExpiresAt: creds.token_expires_at
-    });
+    const result = await fetchConfirmedState(site, creds, dependencies);
     repository.saveCredentialTokens(siteId, {
       token: result.token,
       refresh_token: result.refresh_token,
@@ -111,6 +131,7 @@ async function syncDueSites(dependencies = {}) {
 }
 
 module.exports = {
+  fetchConfirmedState,
   syncSite,
   syncAllSites,
   syncDueSites,

@@ -96,6 +96,30 @@ test('checkUpstreamKeys records all live results and returns safe rows', async (
   assert.equal(JSON.stringify(result).includes('sk-a'), false);
 });
 
+test('scheduled checks only probe explicitly enabled Keys with a model', async () => {
+  const recorded = [];
+  const repository = {
+    listSites: () => [{ id: 3, name: 'Fixture', status: 'active', last_key_check_at: null }],
+    getSite: () => ({ id: 3, name: 'Fixture', status: 'active', openai_probe_model: 'site-model' }),
+    getCredentials: () => ({ token: 'admin' }),
+    reconcileKeySnapshots: () => ({}),
+    attachKeySecrets: (siteId, keys) => keys.map((key) => ({ ...key, key_full: `sk-complete-secret-${key.id}-123456` })),
+    getKeyProbeSettings: (siteId, keyId) => ({ periodic_enabled: keyId === 1 ? 1 : 0, selected_model: keyId === 1 ? 'key-model' : '' }),
+    recordKeyConnectivityCheck: (siteId, keyId, result) => { recorded.push(keyId); return { current: { ...result, consecutive_failures: 0 } }; },
+    listKeySnapshotsWithHealth: () => [{ id: 1, platform: 'openai', periodic_probe_enabled: 1 }]
+  };
+  const result = await require('../src/keyConnectivityService').checkUpstreamKeys(3, {
+    repo: repository,
+    scheduledOnly: true,
+    listKeys: async () => ({ items: [{ id: 1, name: 'Enabled' }, { id: 2, name: 'Disabled' }], total: 2, pages: 1 }),
+    probe: async () => ({ status: 'connected', checked_at: new Date().toISOString() }),
+    evaluateAlert: async () => null,
+    deliverAlerts: async () => {}
+  });
+  assert.equal(result.checked, 1);
+  assert.deepEqual(recorded, [1]);
+});
+
 test('shouldCheckSite respects disabled state and interval', () => {
   assert.equal(shouldCheckSite({ status: 'disabled' }), false);
   assert.equal(shouldCheckSite({ status: 'active', last_key_check_at: null }), true);

@@ -109,3 +109,23 @@ Tasks:
 Pressure check: The environment token is used only when no database target list exists, preventing duplicate delivery after upgrade. Full tests cover legacy resolution, masked status, enabled-target fan-out, and partial failure.
 
 Evidence: `npm test` passed 59/59; JavaScript syntax checks and `git diff --check` passed. Real PushPlus delivery remains user-assisted because no production token was supplied in this task.
+
+## Current Goal: Balance confirmation and per-Key scheduled probes
+
+Status: complete
+Mode: state-main
+Topology: linear
+Git baseline: clean before this goal; prior user history preserved
+
+Outcome: Prevent transient zero-balance readings from triggering false alerts, and make scheduled connectivity probes opt-in per Key with an explicit model.
+
+Tasks:
+
+- T-001 data model and migration: done
+- T-002 zero-balance confirmation: done
+- T-003 per-Key scheduling and alert exit: done
+- T-004 UI and whole-change verification: done
+
+Pressure check: manual checks remain unrestricted; only the scheduler filters opt-in Keys. Disabling a schedule resolves its open incident directly without sending a recovery message.
+
+Evidence: T-001 focused migration/repository tests passed 12/12. T-002 sync/alert tests passed 20/20. T-003 focused scheduling/repository tests passed, including silent alert resolution and explicit per-Key model gating. Full suite passed 77/77; syntax and diff checks passed.

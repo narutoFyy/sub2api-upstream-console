@@ -158,12 +158,61 @@ test('per-Key probe models persist and can return to the group default', () => {
 
   const saved = repo.setKeyProbeModel(site.id, 73, 'gpt-key-specific');
   assert.equal(saved.selected_model, 'gpt-key-specific');
+  assert.equal(saved.periodic_enabled, 0);
   assert.equal(repo.getKeyProbeModel(site.id, 73), 'gpt-key-specific');
   assert.equal(repo.listKeySnapshotsWithHealth(site.id)[0].selected_probe_model, 'gpt-key-specific');
+  assert.equal(repo.listKeySnapshotsWithHealth(site.id)[0].periodic_probe_enabled, 0);
+
+  const enabled = repo.setKeyProbeSchedule(site.id, 73, true);
+  assert.equal(enabled.periodic_enabled, 1);
+  assert.equal(repo.getKeyProbeSettings(site.id, 73).periodic_enabled, 1);
 
   const cleared = repo.setKeyProbeModel(site.id, 73, '');
   assert.equal(cleared.selected_model, '');
+  assert.equal(cleared.periodic_enabled, 0);
   assert.equal(repo.getKeyProbeModel(site.id, 73), '');
+});
+
+test('per-Key periodic probes default off and require an explicit model', () => {
+  const site = repo.createSite({
+    name: 'Key Probe Schedule Test',
+    base_url: `https://key-probe-schedule-${process.pid}.example`,
+    upstream_type: 'sub2api',
+    auth_mode: 'password'
+  });
+  repo.reconcileImportedKeys(site.id, [{ id: 74, name: 'Opt-in Key', key_masked: 'sk-prob...0074' }]);
+
+  assert.equal(repo.getKeyProbeSettings(site.id, 74).periodic_enabled, 0);
+  assert.equal(repo.listKeySnapshotsWithHealth(site.id)[0].periodic_probe_enabled, 0);
+  assert.throws(
+    () => repo.setKeyProbeSchedule(site.id, 74, true),
+    (error) => error.status === 422 && error.message === '请先为该 Key 选择检测模型'
+  );
+});
+
+test('disabling a per-Key schedule silently resolves its open connectivity alert', () => {
+  const site = repo.createSite({
+    name: 'Key Probe Alert Exit Test',
+    base_url: `https://key-probe-alert-exit-${process.pid}.example`,
+    upstream_type: 'sub2api',
+    auth_mode: 'password'
+  });
+  repo.reconcileImportedKeys(site.id, [{ id: 75, name: 'Alert Key', key_masked: 'sk-prob...0075' }]);
+  repo.setKeyProbeModel(site.id, 75, 'gpt-key-specific');
+  repo.setKeyProbeSchedule(site.id, 75, true);
+  repo.openOrTouchAlert({
+    fingerprint: `key_connectivity:${site.id}:75`,
+    event_type: 'key_connectivity',
+    upstream_site_id: site.id,
+    upstream_key_id: '75',
+    title: 'fixture',
+    message: 'fixture'
+  });
+
+  repo.setKeyProbeSchedule(site.id, 75, false);
+  assert.equal(repo.findOpenAlert(`key_connectivity:${site.id}:75`), null);
+  assert.equal(repo.findLatestAlert(`key_connectivity:${site.id}:75`).status, 'resolved');
+  assert.equal(repo.findLatestAlert(`key_connectivity:${site.id}:75`).recovery_notified_at, null);
 });
 
 test('connectivity persistence and legacy history reads redact network and credential details', () => {

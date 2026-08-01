@@ -339,6 +339,7 @@ CREATE TABLE IF NOT EXISTS upstream_key_probe_settings (
   upstream_site_id INTEGER NOT NULL,
   upstream_key_id TEXT NOT NULL DEFAULT '',
   selected_model TEXT NOT NULL DEFAULT '',
+  periodic_enabled INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (upstream_site_id, upstream_key_id),
   FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
@@ -550,6 +551,7 @@ ensureColumn('upstream_api_key_snapshots', 'first_seen_at', 'TEXT');
 ensureColumn('upstream_api_key_snapshots', 'last_seen_at', 'TEXT');
 ensureColumn('upstream_api_key_snapshots', 'missing_since', 'TEXT');
 ensureColumn('upstream_api_key_snapshots', 'import_state', `TEXT NOT NULL DEFAULT 'present'`);
+ensureColumn('upstream_key_probe_settings', 'periodic_enabled', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('upstream_key_connectivity_checks', 'endpoint', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('upstream_key_connectivity_state', 'endpoint', `TEXT NOT NULL DEFAULT ''`);
 ensureColumn('alert_events', 'last_notified_at', 'TEXT');

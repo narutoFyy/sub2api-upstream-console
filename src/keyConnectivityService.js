@@ -216,7 +216,7 @@ async function fetchLiveKeys(site, credentials, dependencies = {}) {
   });
 }
 
-async function checkUpstreamKeys(siteId, { keyId = null, concurrency = 3, ...dependencies } = {}) {
+async function checkUpstreamKeys(siteId, { keyId = null, scheduledOnly = false, concurrency = 3, ...dependencies } = {}) {
   const repository = dependencies.repo || repo;
   const site = repository.getSite(siteId);
   if (!site) {
@@ -244,9 +244,25 @@ async function checkUpstreamKeys(siteId, { keyId = null, concurrency = 3, ...dep
     error.status = 404;
     throw error;
   }
+  const scheduledKeys = scheduledOnly
+    ? targetKeys.filter((key) => {
+        const setting = repository.getKeyProbeSettings?.(siteId, key.id) || {};
+        return Number(setting.periodic_enabled ?? 0) === 1 && Boolean(String(setting.selected_model || '').trim());
+      })
+    : targetKeys;
+  if (scheduledOnly && !scheduledKeys.length) {
+    return {
+      site: { id: site.id, name: site.name },
+      checked: 0,
+      connected: 0,
+      failed: 0,
+      unavailable: 0,
+      items: []
+    };
+  }
   const probe = dependencies.probe || probeKey;
   const pendingNotifications = [];
-  const checks = await mapWithConcurrency(targetKeys, concurrency, async (key) => {
+  const checks = await mapWithConcurrency(scheduledOnly ? scheduledKeys : targetKeys, concurrency, async (key) => {
     const result = await probe(site, key, dependencies);
     const saved = repository.recordKeyConnectivityCheck(siteId, key.id, result);
     const evaluateAlert = dependencies.evaluateAlert || evaluateKeyConnectivity;
@@ -295,7 +311,7 @@ async function checkDueUpstreams(dependencies = {}) {
   const results = [];
   for (const site of sites) {
     try {
-      results.push({ upstream_site_id: site.id, status: 'success', ...(await checkUpstreamKeys(site.id, dependencies)) });
+      results.push({ upstream_site_id: site.id, status: 'success', ...(await checkUpstreamKeys(site.id, { ...dependencies, scheduledOnly: true })) });
     } catch (error) {
       results.push({ upstream_site_id: site.id, status: 'failed', error: error.message });
     }

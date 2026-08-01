@@ -232,6 +232,12 @@ function keyProbeModelSelect(site, key) {
   return `<select class="key-model-select" data-key-probe-model="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" data-previous-model="${escapeHtml(selected)}" aria-label="${escapeHtml(key.name || key.key_masked || 'Key')} 检测模型" title="当前生效：${escapeHtml(key.effective_probe_model || '未配置')}"><option value="">${escapeHtml(followLabel)}</option>${options.map((model) => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(model)}${model === selected && !(key.probe_model_options || []).includes(model) ? ' · 已不在最新候选' : ''}</option>`).join('')}</select>`;
 }
 
+function keyProbeScheduleToggle(key) {
+  const selected = String(key.selected_probe_model || '').trim();
+  const enabled = Number(key.periodic_probe_enabled ?? 0) === 1;
+  return `<label class="toggle-field compact-toggle key-probe-schedule" title="${selected ? '定时联通测试' : '请先选择专用检测模型'}"><input type="checkbox" data-key-probe-schedule="${escapeHtml(key.upstream_key_id)}" data-site-id="${key.upstream_site_id}" ${enabled ? 'checked' : ''} ${selected ? '' : 'disabled'} aria-label="${escapeHtml(key.name || key.key_masked || 'Key')} 定时联通测试" /><span class="toggle-control"></span></label>`;
+}
+
 function filteredMonitoringSites() {
   const keyword = state.search.trim().toLowerCase();
   const items = (state.monitoring.items || []).filter((site) => {
@@ -351,7 +357,7 @@ function renderManagedKeyRows(site, keys) {
   const body = keys.map((key) => {
     const failed = ['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error'].includes(key.connectivity_status);
     const connectivity = connectivityMeta(key);
-    return `<tr class="${failed ? 'failure-row' : ''}"><td>${escapeHtml(key.name || '-')}</td><td><code>${escapeHtml(key.key_masked || '-')}</code></td><td>${escapeHtml(key.group_name || '-')}</td><td>${escapeHtml(platformLabel(key.platform))}</td><td class="numeric">${rateText(key.group_rate)}</td><td>${keyProbeModelSelect(site, key)}</td><td><span class="status-label ${connectivity.tone}-text"><span class="status-dot ${connectivity.dot}"></span>${escapeHtml(connectivity.label)}</span></td><td>${timeText(key.last_checked_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-check-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="检测"><i data-lucide="activity"></i></button><button class="icon-btn" type="button" data-toggle-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" data-next-status="${key.status === 'active' ? 'inactive' : 'active'}" title="${key.status === 'active' ? '暂停' : '启用'}"><i data-lucide="${key.status === 'active' ? 'pause' : 'play'}"></i></button><button class="icon-btn danger-text" type="button" data-delete-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="删除"><i data-lucide="trash-2"></i></button></div></td></tr>`;
+    return `<tr class="${failed ? 'failure-row' : ''}"><td>${escapeHtml(key.name || '-')}</td><td><code>${escapeHtml(key.key_masked || '-')}</code></td><td>${escapeHtml(key.group_name || '-')}</td><td>${escapeHtml(platformLabel(key.platform))}</td><td class="numeric">${rateText(key.group_rate)}</td><td><div class="key-probe-controls">${keyProbeModelSelect(site, key)}${keyProbeScheduleToggle(key)}</div></td><td><span class="status-label ${connectivity.tone}-text"><span class="status-dot ${connectivity.dot}"></span>${escapeHtml(connectivity.label)}</span></td><td>${timeText(key.last_checked_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-check-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="检测"><i data-lucide="activity"></i></button><button class="icon-btn" type="button" data-toggle-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" data-next-status="${key.status === 'active' ? 'inactive' : 'active'}" title="${key.status === 'active' ? '暂停' : '启用'}"><i data-lucide="${key.status === 'active' ? 'pause' : 'play'}"></i></button><button class="icon-btn danger-text" type="button" data-delete-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="删除"><i data-lucide="trash-2"></i></button></div></td></tr>`;
   }).join('');
   return `<tr class="expanded-row"><td colspan="7"><div class="expanded-panel"><div class="expanded-header"><strong>${escapeHtml(site.name)} · Key 明细</strong><span class="muted">${keys.length} 个</span></div><div class="key-inner-wrap"><table class="data-table key-inner-table"><thead><tr><th>Key 名称</th><th>Key</th><th>所属分组</th><th>平台</th><th>倍率</th><th>检测模型</th><th>联通性</th><th>最近检测</th><th class="align-right">操作</th></tr></thead><tbody>${body || '<tr><td colspan="9"><div class="empty-state">没有匹配的 Key</div></td></tr>'}</tbody></table></div></div></td></tr>`;
 }
@@ -1083,6 +1089,23 @@ document.querySelector('#probeModelGroups').addEventListener('change', async (ev
 });
 
 document.addEventListener('change', async (event) => {
+  const schedule = event.target.closest('[data-key-probe-schedule]');
+  if (schedule) {
+    schedule.disabled = true;
+    try {
+      await api(`/api/upstreams/${schedule.dataset.siteId}/keys/${encodeURIComponent(schedule.dataset.keyProbeSchedule)}/probe-schedule`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: schedule.checked })
+      });
+      await refreshAll({ quiet: true });
+      toast(schedule.checked ? '已开启该 Key 定时联通测试' : '已关闭该 Key 定时联通测试', 'success');
+    } catch (error) {
+      schedule.checked = !schedule.checked;
+      schedule.disabled = false;
+      toast(error.message, 'error');
+    }
+    return;
+  }
   const select = event.target.closest('[data-key-probe-model]');
   if (!select) return;
   const previous = select.dataset.previousModel || '';

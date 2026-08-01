@@ -92,6 +92,9 @@ test('legacy database migrates in place without losing rows', () => {
   assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_probe_model_catalog'").get());
   assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_api_key_secrets'").get());
   assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='upstream_key_probe_settings'").get());
+  const keyProbeColumns = db.prepare('PRAGMA table_info(upstream_key_probe_settings)').all().map((item) => item.name);
+  assert.ok(keyProbeColumns.includes('periodic_enabled'));
+  assert.equal(db.prepare("SELECT dflt_value FROM pragma_table_info('upstream_key_probe_settings') WHERE name='periodic_enabled'").get().dflt_value, '0');
   assert.ok(db.prepare('PRAGMA table_info(upstream_key_connectivity_checks)').all().some((item) => item.name === 'endpoint'));
   assert.ok(db.prepare('PRAGMA table_info(upstream_key_connectivity_state)').all().some((item) => item.name === 'endpoint'));
   const alertColumns = db.prepare('PRAGMA table_info(alert_events)').all().map((item) => item.name);

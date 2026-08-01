@@ -482,7 +482,14 @@ function setKeyProbeModel(siteId, keyId, selectedModel) {
     db.prepare(`
       DELETE FROM upstream_key_probe_settings WHERE upstream_site_id = ? AND upstream_key_id = ?
     `).run(siteId, normalizedKeyId);
-    return { upstream_site_id: siteId, upstream_key_id: normalizedKeyId, selected_model: '', updated_at: nowIso() };
+    silentlyResolveKeyConnectivityAlert(siteId, normalizedKeyId);
+    return {
+      upstream_site_id: siteId,
+      upstream_key_id: normalizedKeyId,
+      selected_model: '',
+      periodic_enabled: 0,
+      updated_at: nowIso()
+    };
   }
   const now = nowIso();
   db.prepare(`
@@ -503,6 +510,72 @@ function getKeyProbeModel(siteId, keyId) {
     SELECT selected_model FROM upstream_key_probe_settings
     WHERE upstream_site_id = ? AND upstream_key_id = ?
   `).get(siteId, String(keyId ?? ''))?.selected_model || '';
+}
+
+function setKeyProbeSchedule(siteId, keyId, enabled) {
+  const normalizedKeyId = String(keyId ?? '');
+  const key = db.prepare(`
+    SELECT 1 FROM upstream_api_key_snapshots
+    WHERE upstream_site_id = ? AND upstream_key_id = ? AND import_state != 'missing'
+  `).get(siteId, normalizedKeyId);
+  if (!key) {
+    const error = new Error('Key not found');
+    error.status = 404;
+    throw error;
+  }
+  const setting = db.prepare(`
+    SELECT selected_model FROM upstream_key_probe_settings
+    WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).get(siteId, normalizedKeyId);
+  if (enabled && !String(setting?.selected_model || '').trim()) {
+    const error = new Error('请先为该 Key 选择检测模型');
+    error.status = 422;
+    throw error;
+  }
+  if (!setting) {
+    return {
+      upstream_site_id: siteId,
+      upstream_key_id: normalizedKeyId,
+      selected_model: '',
+      periodic_enabled: 0,
+      updated_at: nowIso()
+    };
+  }
+  const now = nowIso();
+  db.prepare(`
+    UPDATE upstream_key_probe_settings
+    SET periodic_enabled = ?, updated_at = ?
+    WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).run(enabled ? 1 : 0, now, siteId, normalizedKeyId);
+  if (!enabled) {
+    silentlyResolveKeyConnectivityAlert(siteId, normalizedKeyId, now);
+  }
+  return db.prepare(`
+    SELECT * FROM upstream_key_probe_settings
+    WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).get(siteId, normalizedKeyId);
+}
+
+function silentlyResolveKeyConnectivityAlert(siteId, keyId, at = nowIso()) {
+  const fingerprint = `key_connectivity:${siteId}:${String(keyId)}`;
+  db.prepare(`
+    UPDATE alert_events
+    SET status='resolved', resolved_at=?, last_seen_at=?
+    WHERE fingerprint=? AND status='open'
+  `).run(at, at, fingerprint);
+  return true;
+}
+
+function getKeyProbeSettings(siteId, keyId) {
+  return db.prepare(`
+    SELECT * FROM upstream_key_probe_settings
+    WHERE upstream_site_id = ? AND upstream_key_id = ?
+  `).get(siteId, String(keyId ?? '')) || {
+    upstream_site_id: siteId,
+    upstream_key_id: String(keyId ?? ''),
+    selected_model: '',
+    periodic_enabled: 0
+  };
 }
 
 function getMaskedOwnSiteCredentials(id) {
@@ -1283,6 +1356,7 @@ function listKeySnapshotsWithHealth(siteId, { includeMissing = true } = {}, limi
   return db.prepare(`
     SELECT k.*, s.name AS upstream_name, s.base_url,
            kp.selected_model AS selected_probe_model,
+           COALESCE(kp.periodic_enabled, 0) AS periodic_probe_enabled,
            gp.selected_model AS group_probe_model,
            h.status AS connectivity_status, h.probe_level, h.model AS probe_model,
            h.endpoint AS probe_endpoint,
@@ -1884,6 +1958,9 @@ module.exports = {
   getGroupProbeModel,
   setKeyProbeModel,
   getKeyProbeModel,
+  setKeyProbeSchedule,
+  getKeyProbeSettings,
+  silentlyResolveKeyConnectivityAlert,
   createSite,
   updateSite,
   deleteSite,

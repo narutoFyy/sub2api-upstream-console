@@ -288,6 +288,10 @@ const keyProbeModelSchema = z.object({
   selected_model: z.string().trim().max(200)
 });
 
+const keyProbeScheduleSchema = z.object({
+  enabled: z.boolean()
+});
+
 const ownSiteSchema = z.object({
   name: z.string().min(1),
   base_url: z.string().url(),
@@ -1043,6 +1047,17 @@ app.put('/api/upstreams/:id/keys/:keyId/probe-model', (req, res, next) => {
     if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
     const payload = keyProbeModelSchema.parse(req.body || {});
     return res.json({ item: repo.setKeyProbeModel(id, req.params.keyId, payload.selected_model) });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+app.put('/api/upstreams/:id/keys/:keyId/probe-schedule', (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
+    const payload = keyProbeScheduleSchema.parse(req.body || {});
+    return res.json({ item: repo.setKeyProbeSchedule(id, req.params.keyId, payload.enabled) });
   } catch (err) {
     return next(err);
   }
