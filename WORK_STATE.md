@@ -144,8 +144,12 @@ Tasks:
 - T-001 production evidence and field semantics: done
 - T-002 strict parsing, confirmation, monitoring, and alert handling: done
 - T-003 regression verification: done
-- T-004 production backup, release, and observation: implementing
+- T-004 production backup, release, and observation: done
 
 Pressure check: A real zero must remain representable, while missing values, empty strings, and unrelated quota/credit fields must not become money. Two explicit zero reads confirm a real zero; missing reads fail the sync and preserve the prior snapshot.
 
 Verification evidence: Focused balance-path tests passed 32/32. The full suite passed 82/82, JavaScript syntax and `git diff --check` passed, and `npm audit --omit=dev` reported 0 vulnerabilities.
+
+Production evidence: SQLite backup `/var/backups/sub2api-upstream-console/20260802T013226Z/upstream-console.sqlite` passed `PRAGMA integrity_check`. Production advanced to `fb0ad740eb46befeec963d739c5bc5b832abf205` (v1.8.4), restarted successfully, `/api/health` returned HTTP 200, and the latest five Dream syncs all succeeded with balance `7.2459463` and zero sync failures.
+
+Status: complete
