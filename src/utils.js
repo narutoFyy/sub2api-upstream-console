@@ -15,10 +15,17 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function finiteNumberOrNull(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function pickFirstNumber(...values) {
   for (const value of values) {
-    const n = Number(value);
-    if (Number.isFinite(n)) return n;
+    const n = finiteNumberOrNull(value);
+    if (n !== null) return n;
   }
   return null;
 }
@@ -72,6 +79,7 @@ module.exports = {
   nowIso,
   normalizeBaseUrl,
   toNumber,
+  finiteNumberOrNull,
   pickFirstNumber,
   isPrivateHostname,
   assertSafeUpstreamUrl,

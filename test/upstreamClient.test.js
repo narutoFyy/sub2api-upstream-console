@@ -3,6 +3,7 @@ require('./testEnv');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  extractBalance,
   extractDiscoveredBaseUrl,
   refreshAccessToken,
   sanitizeUpstreamText,
@@ -10,6 +11,12 @@ const {
   tokenNeedsRefresh,
   upstreamErrorMessage
 } = require('../src/upstreamClient');
+
+test('Sub2API balance accepts only explicit balance fields', () => {
+  assert.equal(extractBalance({ balance: 7.25, quota: 94.28, credit: 88 }), 7.25);
+  assert.equal(extractBalance({ balance: null, user_balance: '7.5', quota: 94.28 }), 7.5);
+  assert.equal(extractBalance({ balance: '', user_balance: undefined, quota: 94.28, credit: 88 }), null);
+});
 
 test('access token refresh uses the Sub2API refresh contract', async () => {
   const originalFetch = global.fetch;

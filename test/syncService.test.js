@@ -94,3 +94,34 @@ test('failed zero-balance confirmation preserves the previous snapshot and recor
   assert.equal(repository.events.some((item) => item.includes('log:failed:余额首次返回 0')), true);
   assert.equal(alerts, 1);
 });
+
+test('missing balance twice is rejected instead of being persisted as zero', async () => {
+  const repository = fakeRepository();
+  let calls = 0;
+
+  await assert.rejects(() => syncSite(1, {
+    repo: repository,
+    settings: {},
+    fetchUpstreamState: async () => { calls += 1; return state(null); },
+    delay: async () => {},
+    evaluateAlerts: async () => {}
+  }), /余额首次缺失，复查仍未返回有效数值，已保留上一有效余额/);
+
+  assert.equal(calls, 2);
+  assert.equal(repository.events.some((item) => item.startsWith('save:')), false);
+});
+
+test('a single zero after a missing balance is not considered confirmed', async () => {
+  const repository = fakeRepository();
+  const responses = [state(undefined), state(0)];
+
+  await assert.rejects(() => syncSite(1, {
+    repo: repository,
+    settings: {},
+    fetchUpstreamState: async () => responses.shift(),
+    delay: async () => {},
+    evaluateAlerts: async () => {}
+  }), /余额首次缺失，复查仅返回一次 0，已保留上一有效余额/);
+
+  assert.equal(repository.events.some((item) => item.startsWith('save:')), false);
+});

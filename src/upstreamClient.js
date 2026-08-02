@@ -281,7 +281,7 @@ async function loginWithNewAPI(baseUrl, email, password) {
 }
 
 function extractBalance(profile) {
-  return pickFirstNumber(profile?.balance, profile?.user_balance, profile?.quota, profile?.credit);
+  return pickFirstNumber(profile?.balance, profile?.user_balance);
 }
 
 function extractUsage(stats) {
@@ -1024,6 +1024,7 @@ module.exports = {
   requestJson,
   sanitizeUpstreamText,
   upstreamErrorMessage,
+  extractBalance,
   extractDiscoveredBaseUrl,
   discoverUpstreamBaseUrl,
   createPaymentOrder,

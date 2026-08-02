@@ -1,6 +1,7 @@
 const repo = require('./repository');
 const { sendPushPlus } = require('./pushPlusClient');
 const { defaultRuntimeSettings, runtimeSettingsStatus } = require('./runtimeSettings');
+const { finiteNumberOrNull } = require('./utils');
 
 const KEY_FAILURE_STATES = new Set(['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error']);
 
@@ -221,9 +222,9 @@ async function evaluateSiteAlerts(siteId, dependencies = {}) {
   const results = [];
   const deliveryEnabled = Number(site.alert_notifications_enabled ?? 1) !== 0;
   const lowBalanceFingerprint = `low_balance:${site.id}`;
-  const balance = Number(site.balance);
+  const balance = finiteNumberOrNull(site.balance);
   const threshold = Number(site.low_balance_threshold || settings.upstream_default_low_balance_threshold || 10);
-  if (Number(site.low_balance_alert_enabled ?? 1) !== 0 && Number.isFinite(balance) && balance < threshold) {
+  if (Number(site.low_balance_alert_enabled ?? 1) !== 0 && balance !== null && balance < threshold) {
     results.push(await openAndNotify({
       fingerprint: lowBalanceFingerprint,
       event_type: 'low_balance',
@@ -234,7 +235,7 @@ async function evaluateSiteAlerts(siteId, dependencies = {}) {
       title: `[余额预警] ${site.name}`,
       message: `上游：${site.name}\n当前余额：${balance}\n预警阈值：${threshold}\n时间：${site.last_sync_at || new Date().toISOString()}`
     }, { ...dependencies, settings, deferNotification: true }));
-  } else if (Number.isFinite(balance) && balance >= threshold) {
+  } else if (balance !== null && balance >= threshold) {
     results.push(await resolveAndNotify(lowBalanceFingerprint, {
       event_type: 'low_balance',
       severity: 'warning',

@@ -20,6 +20,7 @@ const { runtimeSettingsStatus, updateRuntimeSettings } = require('./runtimeSetti
 const { startRuntimeScheduler, schedulerAllowed } = require('./runtimeScheduler');
 const { createUpdateService } = require('./updateService');
 const database = require('./db');
+const { finiteNumberOrNull } = require('./utils');
 const {
   listSub2APIKeys,
   listSub2APIGroups,
@@ -369,10 +370,13 @@ app.get('/api/dashboard', (req, res) => {
     has_unacknowledged_rate_change: changedSiteIds.has(Number(site.id))
   }));
   const rechargeAlerts = sites
-    .filter((site) => Number.isFinite(Number(site.balance)) && Number(site.balance) < Number(site.low_balance_threshold || 10))
+    .filter((site) => {
+      const balance = finiteNumberOrNull(site.balance);
+      return balance !== null && balance < Number(site.low_balance_threshold || 10);
+    })
     .map((site) => {
       const threshold = Number(site.low_balance_threshold || 10);
-      const balance = Number(site.balance || 0);
+      const balance = finiteNumberOrNull(site.balance);
       const methods = availablePaymentMethods(site).filter((item) => item?.type && item?.available !== false);
       return {
         id: site.id,
@@ -392,7 +396,8 @@ app.get('/api/dashboard', (req, res) => {
     acc.today_cost += Number(site.today_cost || 0);
     if (site.status === 'active') acc.active += 1;
     if (site.status === 'sync_failed' || site.status === 'login_failed') acc.failed += 1;
-    if (Number.isFinite(Number(site.balance)) && Number(site.balance) < Number(site.low_balance_threshold || 10)) acc.low_balance += 1;
+    const balance = finiteNumberOrNull(site.balance);
+    if (balance !== null && balance < Number(site.low_balance_threshold || 10)) acc.low_balance += 1;
     if (site.last_sync_at) acc.synced += 1;
     return acc;
   }, { upstreams: sites.length, active: 0, failed: 0, low_balance: 0, synced: 0, today_tokens: 0, today_cost: 0 });

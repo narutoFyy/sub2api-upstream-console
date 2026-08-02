@@ -1,4 +1,5 @@
 const repo = require('./repository');
+const { finiteNumberOrNull } = require('./utils');
 
 const KEY_FAILURE_STATES = new Set(['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error']);
 
@@ -56,11 +57,12 @@ function buildUpstreamMonitoring(repository = repo, now = Date.now()) {
     };
   });
   const totals = items.reduce((acc, site) => {
-    const lowBalance = Number.isFinite(Number(site.balance)) && Number(site.balance) < Number(site.low_balance_threshold || 10);
+    const balance = finiteNumberOrNull(site.balance);
+    const lowBalance = balance !== null && balance < Number(site.low_balance_threshold || 10);
     const hasOperationalIssue = site.status === 'sync_failed' || site.balance_stale || site.key_abnormal_count > 0 || lowBalance;
     acc.upstreams += 1;
     if (site.status === 'active' && !hasOperationalIssue) acc.healthy += 1;
-    if (Number.isFinite(Number(site.balance))) acc.balance += Number(site.balance);
+    if (balance !== null) acc.balance += balance;
     acc.keys += Number(site.key_count || 0);
     acc.key_abnormal += Number(site.key_abnormal_count || 0);
     if (lowBalance) acc.low_balance += 1;

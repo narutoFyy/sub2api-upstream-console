@@ -264,6 +264,27 @@ test('site balance alert includes zero balance and deduplicates', async () => {
   assert.equal(repository.alerts[0].severity, 'critical');
 });
 
+test('missing balance does not open or resolve a low-balance alert', async () => {
+  const repository = alertRepository();
+  repository.listSites = () => [{
+    id: 5,
+    name: 'Unknown Balance API',
+    balance: null,
+    low_balance_threshold: 10,
+    status: 'active',
+    sync_success_count: 1
+  }];
+  const messages = [];
+
+  await evaluateSiteAlerts(5, {
+    repo: repository,
+    notify: async (message) => { messages.push(message); return { ok: true }; }
+  });
+
+  assert.equal(repository.alerts.length, 0);
+  assert.equal(messages.length, 0);
+});
+
 test('notification failure keeps the incident recorded without throwing', async () => {
   const repository = alertRepository();
   const errors = [];

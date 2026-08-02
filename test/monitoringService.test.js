@@ -37,3 +37,23 @@ test('monitoring aggregation counts balance, active Keys and failures', () => {
     abnormal: 1
   });
 });
+
+test('monitoring excludes missing balances from totals and low-balance counts', () => {
+  const repository = {
+    listSites: () => [{
+      id: 2,
+      status: 'active',
+      balance: null,
+      low_balance_threshold: 10,
+      last_sync_at: '2026-01-01T00:59:00.000Z',
+      sync_interval_seconds: 180
+    }],
+    listKeySnapshotsWithHealth: () => [],
+    listUpstreamProbeModels: () => []
+  };
+
+  const result = buildUpstreamMonitoring(repository, Date.parse('2026-01-01T01:00:00.000Z'));
+  assert.equal(result.totals.balance, 0);
+  assert.equal(result.totals.low_balance, 0);
+  assert.equal(result.totals.healthy, 1);
+});

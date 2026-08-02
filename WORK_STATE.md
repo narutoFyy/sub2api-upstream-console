@@ -129,3 +129,23 @@ Tasks:
 Pressure check: manual checks remain unrestricted; only the scheduler filters opt-in Keys. Disabling a schedule resolves its open incident directly without sending a recovery message.
 
 Evidence: T-001 focused migration/repository tests passed 12/12. T-002 sync/alert tests passed 20/20. T-003 focused scheduling/repository tests passed, including silent alert resolution and explicit per-Key model gating. Full suite passed 77/77; syntax and diff checks passed.
+
+## Current Goal: Strict balance validity and false recovery prevention
+
+Status: implementing
+Mode: state-main
+Topology: linear
+Git baseline: clean commit `fe26fe8`; production runs the same commit
+
+Outcome: Missing Sub2API balance fields must preserve the last valid snapshot and must never open a false zero-balance incident or trigger a false recovery notification.
+
+Tasks:
+
+- T-001 production evidence and field semantics: done
+- T-002 strict parsing, confirmation, monitoring, and alert handling: done
+- T-003 regression verification: done
+- T-004 production backup, release, and observation: implementing
+
+Pressure check: A real zero must remain representable, while missing values, empty strings, and unrelated quota/credit fields must not become money. Two explicit zero reads confirm a real zero; missing reads fail the sync and preserve the prior snapshot.
+
+Verification evidence: Focused balance-path tests passed 32/32. The full suite passed 82/82, JavaScript syntax and `git diff --check` passed, and `npm audit --omit=dev` reported 0 vulnerabilities.

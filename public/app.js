@@ -129,7 +129,15 @@ function ageText(ms) {
 }
 
 function numberText(value, fallback = '-') {
-  return Number.isFinite(Number(value)) ? money.format(Number(value)) : fallback;
+  const number = finiteNumberOrNull(value);
+  return number === null ? fallback : money.format(number);
+}
+
+function finiteNumberOrNull(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function tokenText(value) {
@@ -192,7 +200,8 @@ function monitoringMetrics() {
 }
 
 function isLowBalance(site) {
-  return Number.isFinite(Number(site.balance)) && Number(site.balance) < Number(site.low_balance_threshold || 10);
+  const balance = finiteNumberOrNull(site.balance);
+  return balance !== null && balance < Number(site.low_balance_threshold || 10);
 }
 
 function siteHealth(site) {
@@ -846,7 +855,7 @@ async function openDetail(siteId) {
     document.querySelector('#detailSubtitle').textContent = site.base_url;
     const methods = Array.isArray(snapshot.payment_methods) ? snapshot.payment_methods.filter((item) => item?.available !== false) : [];
     document.querySelector('#detailContent').innerHTML = `
-      <div class="detail-metrics"><div class="detail-metric"><span>余额</span><strong>$${numberText(snapshot.balance)}</strong></div><div class="detail-metric"><span>今日 Token</span><strong>${tokenText(snapshot.today_tokens)}</strong></div><div class="detail-metric"><span>今日成本</span><strong>$${numberText(snapshot.today_cost)}</strong></div><div class="detail-metric"><span>OpenAI 倍率</span><strong>${rateText(snapshot.openai_rate)}</strong></div><div class="detail-metric"><span>Anthropic 倍率</span><strong>${rateText(snapshot.anthropic_rate)}</strong></div><div class="detail-metric"><span>Key</span><strong>${snapshot.key_count || 0}</strong></div></div>
+      <div class="detail-metrics"><div class="detail-metric"><span>余额</span><strong>${finiteNumberOrNull(snapshot.balance) === null ? '-' : `$${numberText(snapshot.balance)}`}</strong></div><div class="detail-metric"><span>今日 Token</span><strong>${tokenText(snapshot.today_tokens)}</strong></div><div class="detail-metric"><span>今日成本</span><strong>$${numberText(snapshot.today_cost)}</strong></div><div class="detail-metric"><span>OpenAI 倍率</span><strong>${rateText(snapshot.openai_rate)}</strong></div><div class="detail-metric"><span>Anthropic 倍率</span><strong>${rateText(snapshot.anthropic_rate)}</strong></div><div class="detail-metric"><span>Key</span><strong>${snapshot.key_count || 0}</strong></div></div>
       <div class="detail-block"><div class="button-group"><button class="btn secondary" data-edit-from-detail="${site.id}"><i data-lucide="pencil"></i>编辑上游</button><button class="btn secondary" data-import-keys="${site.id}"><i data-lucide="download"></i>导入 Key</button><button class="btn primary" data-check-site-keys="${site.id}"><i data-lucide="activity"></i>检测 Key</button></div></div>
       <div class="detail-block"><h3>能力状态</h3><div class="detail-list">${Object.entries(detail.capabilities || {}).filter(([key]) => key !== 'errors').map(([key, value]) => `<div class="detail-line"><span>${escapeHtml(key)}</span><strong class="${value ? 'healthy-text' : 'muted'}">${value ? '可用' : '不可用'}</strong></div>`).join('')}</div></div>
       <div class="detail-block"><h3>分组倍率</h3><div class="detail-list">${(detail.rates || []).slice(0, 20).map((rate) => `<div class="detail-line"><span>${escapeHtml(rate.group_name || rate.group_id)}</span><strong>${rateText(rate.rate)}</strong></div>`).join('') || '<div class="empty-state">暂无倍率</div>'}</div></div>

@@ -1,6 +1,6 @@
 const repo = require('./repository');
 const { fetchSub2APIState } = require('./upstreamClient');
-const { nowIso } = require('./utils');
+const { nowIso, finiteNumberOrNull } = require('./utils');
 const { evaluateSiteAlerts } = require('./alertService');
 const { runtimeSettingsStatus } = require('./runtimeSettings');
 
@@ -27,17 +27,28 @@ function fetchArguments(site, credentials, tokenOverride = '') {
 async function fetchConfirmedState(site, credentials, dependencies = {}) {
   const fetchState = dependencies.fetchUpstreamState || fetchSub2APIState;
   const first = await fetchState(fetchArguments(site, credentials));
-  if (Number(first?.snapshot?.balance) !== 0) return first;
+  const firstBalance = finiteNumberOrNull(first?.snapshot?.balance);
+  if (firstBalance !== null && firstBalance !== 0) return first;
 
   const delay = dependencies.delay || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   await delay(Number(dependencies.zeroBalanceRetryDelayMs ?? 5000));
+  let second;
   try {
-    return await fetchState(fetchArguments(site, credentials, first.token));
+    second = await fetchState(fetchArguments(site, credentials, first.token));
   } catch (error) {
-    const retryError = new Error(`余额首次返回 0，复查失败，已保留上一有效余额：${error.message}`);
+    const firstResult = firstBalance === 0 ? '首次返回 0' : '首次缺失';
+    const retryError = new Error(`余额${firstResult}，复查失败，已保留上一有效余额：${error.message}`);
     retryError.cause = error;
     throw retryError;
   }
+
+  const secondBalance = finiteNumberOrNull(second?.snapshot?.balance);
+  if (secondBalance === null || (firstBalance === null && secondBalance === 0)) {
+    const firstResult = firstBalance === 0 ? '首次返回 0' : '首次缺失';
+    const secondResult = secondBalance === null ? '复查仍未返回有效数值' : '复查仅返回一次 0';
+    throw new Error(`余额${firstResult}，${secondResult}，已保留上一有效余额`);
+  }
+  return second;
 }
 
 async function syncSite(siteId, dependencies = {}) {
