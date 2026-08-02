@@ -248,8 +248,10 @@ function consumptionChartMarkup(item) {
   const width = 640;
   const left = 42;
   const right = 12;
-  const top = 18;
-  const bottom = 184;
+  const balanceTop = 16;
+  const balanceBottom = 104;
+  const consumptionTop = 10;
+  const consumptionBottom = 92;
   const plotWidth = width - left - right;
   const step = plotWidth / buckets.length;
   const consumptionMax = Math.max(0, ...buckets.map((bucket) => Number(bucket.consumption || 0)));
@@ -258,25 +260,34 @@ function consumptionChartMarkup(item) {
   const balanceMax = balances.length ? Math.max(...balances) : 0;
   const balanceRange = Math.max(balanceMax - balanceMin, Math.abs(balanceMax || 1) * 0.02, 0.01);
   const bars = buckets.map((bucket, index) => {
-    const height = consumptionMax > 0 ? Number(bucket.consumption || 0) / consumptionMax * 62 : 0;
-    return `<rect class="consumption-bar" x="${(left + index * step + step * 0.2).toFixed(2)}" y="${(bottom - height).toFixed(2)}" width="${Math.max(2, step * 0.6).toFixed(2)}" height="${height.toFixed(2)}"><title>${escapeHtml(chartTimeLabel(bucket.started_at, item.period))} · $${numberText(bucket.consumption, '0')}</title></rect>`;
+    const height = consumptionMax > 0 ? Number(bucket.consumption || 0) / consumptionMax * (consumptionBottom - consumptionTop) : 0;
+    return `<rect class="consumption-bar" x="${(left + index * step + step * 0.2).toFixed(2)}" y="${(consumptionBottom - height).toFixed(2)}" width="${Math.max(2, step * 0.6).toFixed(2)}" height="${height.toFixed(2)}"><title>${escapeHtml(chartTimeLabel(bucket.started_at, item.period))} · $${numberText(bucket.consumption, '0')}</title></rect>`;
   }).join('');
   const points = buckets.map((bucket, index) => {
     const balance = finiteNumberOrNull(bucket.balance);
     if (balance === null) return null;
     const x = left + index * step + step / 2;
-    const y = top + ((balanceMax - balance) / balanceRange) * 92;
+    const y = balanceTop + ((balanceMax - balance) / balanceRange) * (balanceBottom - balanceTop);
     return `${x.toFixed(2)},${y.toFixed(2)}`;
   }).filter(Boolean).join(' ');
   const labels = [buckets[0], buckets[Math.floor((buckets.length - 1) / 2)], buckets.at(-1)];
-  return `<svg class="consumption-chart" viewBox="0 0 ${width} 216" role="img" aria-label="${escapeHtml(item.name)}余额折线和分时消耗柱状图">
-    <line class="chart-gridline" x1="${left}" y1="${top}" x2="${width - right}" y2="${top}"></line>
-    <line class="chart-gridline" x1="${left}" y1="110" x2="${width - right}" y2="110"></line>
-    <line class="chart-gridline" x1="${left}" y1="${bottom}" x2="${width - right}" y2="${bottom}"></line>
-    ${bars}<polyline class="balance-line" points="${points}"></polyline>
-    <text class="chart-axis-label" x="2" y="22">余额</text><text class="chart-axis-label" x="2" y="188">消耗</text>
-    ${labels.map((bucket, index) => `<text class="chart-axis-label chart-time-label label-${index}" x="${index === 0 ? left : index === 1 ? width / 2 : width - right}" y="208">${escapeHtml(chartTimeLabel(bucket.started_at, item.period))}</text>`).join('')}
-  </svg>`;
+  const balanceLabel = balances.length ? `$${numberText(balanceMax)} / $${numberText(balanceMin)}` : '暂无余额';
+  const consumptionLabel = `$${numberText(consumptionMax, '0')} 峰值`;
+  return `<div class="consumption-chart-stack" role="img" aria-label="${escapeHtml(item.name)}余额趋势和每${item.period === '24h' ? '小时' : '时段'}消耗">
+    <div class="chart-section-label"><span>余额趋势</span><small>${escapeHtml(balanceLabel)}</small></div>
+    <svg class="consumption-chart balance-chart" viewBox="0 0 ${width} 122" aria-hidden="true">
+      <line class="chart-gridline" x1="${left}" y1="${balanceTop}" x2="${width - right}" y2="${balanceTop}"></line>
+      <line class="chart-gridline" x1="${left}" y1="${balanceBottom}" x2="${width - right}" y2="${balanceBottom}"></line>
+      <polyline class="balance-line" points="${points}"></polyline>
+    </svg>
+    <div class="chart-section-label"><span>分时消耗</span><small>${escapeHtml(consumptionLabel)}</small></div>
+    <svg class="consumption-chart consumption-bars-chart" viewBox="0 0 ${width} 116" aria-hidden="true">
+      <line class="chart-gridline" x1="${left}" y1="${consumptionTop}" x2="${width - right}" y2="${consumptionTop}"></line>
+      <line class="chart-gridline" x1="${left}" y1="${consumptionBottom}" x2="${width - right}" y2="${consumptionBottom}"></line>
+      ${bars}
+      ${labels.map((bucket, index) => `<text class="chart-axis-label chart-time-label label-${index}" x="${index === 0 ? left : index === 1 ? width / 2 : width - right}" y="110">${escapeHtml(chartTimeLabel(bucket.started_at, item.period))}</text>`).join('')}
+    </svg>
+  </div>`;
 }
 
 function filteredConsumptionItems() {
@@ -315,7 +326,7 @@ function renderConsumptionDashboard() {
     <span class="consumption-rank-name">${escapeHtml(item.name)}</span><span class="consumption-track"><i style="width:${max > 0 ? Math.max(3, Number(item.consumption || 0) / max * 100) : 0}%"></i></span><strong>${escapeHtml(consumptionAmountText(item))}</strong><small>${escapeHtml(consumptionSpeedText(item))}</small>
   </button>`).join('');
   const selected = visible.find((item) => Number(item.id) === Number(state.consumption.selectedSiteId)) || visible[0];
-  detail.innerHTML = `<div class="consumption-detail-head"><div><h3>${escapeHtml(selected.name)}</h3><span class="muted">${escapeHtml(consumptionCoverageText(selected))}${selected.estimated ? ' · 余额估算' : ' · 实际成本'}</span></div><div class="consumption-detail-balance"><span>当前余额</span><strong>${selected.current_balance == null ? '-' : `$${numberText(selected.current_balance)}`}</strong></div></div>${consumptionChartMarkup(selected)}<div class="chart-legend"><span><i class="legend-line"></i>余额</span><span><i class="legend-bar"></i>分时消耗</span><span>预计可用 ${escapeHtml(runwayText(selected))}</span></div>`;
+  detail.innerHTML = `<div class="consumption-detail-head"><div><h3>${escapeHtml(selected.name)}</h3><span class="muted">${escapeHtml(consumptionCoverageText(selected))}${selected.estimated ? ' · 余额估算' : ' · 实际成本'}</span></div><div class="consumption-detail-balance"><span>当前余额</span><strong>${selected.current_balance == null ? '-' : `$${numberText(selected.current_balance)}`}</strong></div></div>${consumptionChartMarkup(selected)}<div class="chart-legend"><span>预计可用 ${escapeHtml(runwayText(selected))}</span><span>数据按同步快照计算</span></div>`;
 }
 
 async function loadConsumption({ quiet = false } = {}) {
