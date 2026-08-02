@@ -427,7 +427,7 @@ function renderMonitoring() {
         <td><span class="numeric">${site.key_count || 0} 个 Key</span></td>
         <td class="numeric ${site.key_abnormal_count ? 'danger-text' : ''}">${site.key_abnormal_count || 0}</td>
         <td><div class="cell-stack sync-cell"><span>${timeText(site.last_sync_at)}</span>${syncError.full ? `<small class="danger-text sync-error" title="${escapeHtml(syncError.full)}">${escapeHtml(syncError.summary)}</small>` : ''}</div></td>
-        <td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-sync-site="${site.id}" title="同步"><i data-lucide="refresh-cw"></i></button><button class="icon-btn" type="button" data-detail-site="${site.id}" title="详情"><i data-lucide="ellipsis-vertical"></i></button></div></td>
+        <td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-sync-site="${site.id}" title="同步余额和 Key"><i data-lucide="refresh-cw"></i></button><button class="icon-btn" type="button" data-sync-site-models="${site.id}" title="同步支持模型"><i data-lucide="boxes"></i></button><button class="icon-btn" type="button" data-detail-site="${site.id}" title="详情"><i data-lucide="ellipsis-vertical"></i></button></div></td>
       </tr>
       ${expanded ? renderExpandedKeys(site) : ''}
     `;
@@ -1138,6 +1138,15 @@ document.querySelector('#createKeyPlatform').addEventListener('change', loadCrea
 
 document.querySelector('#refreshBtn').addEventListener('click', (event) => runAction(event.currentTarget, '刷新中', async () => { await refreshAll({ quiet: true }); toast('数据已刷新', 'success'); }));
 document.querySelector('#syncAllBtn').addEventListener('click', (event) => runAction(event.currentTarget, '同步中', async () => { await api('/api/sync-all', { method: 'POST' }); await refreshAll({ quiet: true }); toast('全部上游同步完成', 'success'); }));
+document.querySelector('#syncAllModelsBtn').addEventListener('click', (event) => runAction(event.currentTarget, '同步中', async () => {
+  const sites = state.monitoring.items || [];
+  if (!sites.length) throw new Error('当前没有可同步的上游');
+  const results = await Promise.allSettled(sites.map((site) => api(`/api/upstreams/${site.id}/models/sync`, { method: 'POST' })));
+  const failed = results.filter((result) => result.status === 'rejected');
+  await refreshAll({ quiet: true });
+  if (failed.length) throw new Error(`已完成 ${sites.length - failed.length} 个上游，${failed.length} 个失败`);
+  toast(`已同步 ${sites.length} 个上游的支持模型`, 'success');
+}));
 
 document.querySelector('#runtimeSettingsSaveBtn').addEventListener('click', async (event) => {
   const next = collectRuntimeSettings();
