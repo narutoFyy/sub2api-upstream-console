@@ -1138,15 +1138,28 @@ document.querySelector('#createKeyPlatform').addEventListener('change', loadCrea
 
 document.querySelector('#refreshBtn').addEventListener('click', (event) => runAction(event.currentTarget, '刷新中', async () => { await refreshAll({ quiet: true }); toast('数据已刷新', 'success'); }));
 document.querySelector('#syncAllBtn').addEventListener('click', (event) => runAction(event.currentTarget, '同步中', async () => { await api('/api/sync-all', { method: 'POST' }); await refreshAll({ quiet: true }); toast('全部上游同步完成', 'success'); }));
-document.querySelector('#syncAllModelsBtn').addEventListener('click', (event) => runAction(event.currentTarget, '同步中', async () => {
+async function syncAllUpstreamModels(button) {
   const sites = state.monitoring.items || [];
   if (!sites.length) throw new Error('当前没有可同步的上游');
-  const results = await Promise.allSettled(sites.map((site) => api(`/api/upstreams/${site.id}/models/sync`, { method: 'POST' })));
-  const failed = results.filter((result) => result.status === 'rejected');
+  let completed = 0;
+  const failed = [];
+  for (const site of sites) {
+    button.textContent = `同步中 ${completed + 1}/${sites.length}`;
+    try {
+      await api(`/api/upstreams/${site.id}/models/sync`, { method: 'POST' });
+    } catch (error) {
+      failed.push(`${site.name}: ${error.message}`);
+    }
+    completed += 1;
+  }
   await refreshAll({ quiet: true });
-  if (failed.length) throw new Error(`已完成 ${sites.length - failed.length} 个上游，${failed.length} 个失败`);
+  if (failed.length) throw new Error(`已完成 ${sites.length - failed.length} 个上游，${failed.length} 个失败：${failed.join('；')}`);
   toast(`已同步 ${sites.length} 个上游的支持模型`, 'success');
-}));
+}
+
+for (const selector of ['#syncAllModelsBtn', '#syncAllModelsTopBtn']) {
+  document.querySelector(selector).addEventListener('click', (event) => runAction(event.currentTarget, '同步中', () => syncAllUpstreamModels(event.currentTarget)));
+}
 
 document.querySelector('#runtimeSettingsSaveBtn').addEventListener('click', async (event) => {
   const next = collectRuntimeSettings();
