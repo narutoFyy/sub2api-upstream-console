@@ -95,6 +95,26 @@
           <section class="view" data-view="monitoring">
             <div id="monitoringMetrics" class="metric-strip"></div>
 
+            <section class="consumption-board" aria-labelledby="consumptionBoardTitle">
+              <div class="consumption-board-head">
+                <div><h2 id="consumptionBoardTitle">余额消耗</h2><p id="consumptionBoardSummary" class="muted">正在读取趋势...</p></div>
+                <div id="consumptionPeriods" class="segment-control compact-segments" role="group" aria-label="消耗统计周期">
+                  <button class="active" type="button" data-consumption-period="24h">24 小时</button>
+                  <button type="button" data-consumption-period="7d">7 天</button>
+                  <button type="button" data-consumption-period="30d">30 天</button>
+                </div>
+              </div>
+              <div class="consumption-grid">
+                <div class="consumption-pane">
+                  <div class="consumption-pane-title"><h3>消耗排行</h3><span class="muted">Top 10</span></div>
+                  <div id="consumptionRanking" class="consumption-ranking"></div>
+                </div>
+                <div class="consumption-pane consumption-detail-pane">
+                  <div id="consumptionDetail"></div>
+                </div>
+              </div>
+            </section>
+
             <div class="filter-row">
               <div id="monitorStatusSegments" class="segment-control" role="group" aria-label="状态筛选">
                 <button class="active" type="button" data-monitor-status="all">全部 <strong id="segmentAllCount">0</strong></button>
@@ -107,6 +127,7 @@
                 <select id="monitorSortSelect" aria-label="上游排序">
                   <option value="balance-asc">按余额升序</option>
                   <option value="balance-desc">按余额降序</option>
+                  <option value="consumption-desc">按周期消耗</option>
                   <option value="abnormal-desc">按异常数量</option>
                   <option value="name-asc">按名称</option>
                 </select>
@@ -118,7 +139,7 @@
               <div class="table-scroll">
                 <table class="data-table upstream-table">
                   <thead>
-                    <tr><th>上游</th><th>余额</th><th>上游状态</th><th>Key</th><th>Key 异常</th><th>最近同步</th><th class="align-right">操作</th></tr>
+                    <tr><th>上游</th><th>余额</th><th>周期消耗</th><th>消耗速度</th><th>预计可用</th><th>上游状态</th><th>Key</th><th>Key 异常</th><th>最近同步</th><th class="align-right">操作</th></tr>
                   </thead>
                   <tbody id="monitoringRows"></tbody>
                 </table>

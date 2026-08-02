@@ -11,6 +11,7 @@ const { createPaymentOrder, fetchSub2APIState, getPaymentOrder } = require('./up
 const { fetchOwnSiteRoutes } = require('./ownSiteClient');
 const { importAllKeys } = require('./keyImportService');
 const { buildUpstreamMonitoring } = require('./monitoringService');
+const { buildConsumptionDashboard, normalizePeriod } = require('./consumptionTrendService');
 const { checkUpstreamKeys } = require('./keyConnectivityService');
 const { pushPlusStatus, sendPushPlus, readPushPlusTargets, savePushPlusTargets, PUSHPLUS_TARGETS_KEY } = require('./pushPlusClient');
 const { syncUpstreamModels } = require('./modelDiscoveryService');
@@ -540,6 +541,10 @@ app.get('/api/monitoring/upstreams', (req, res) => {
   monitoring.open_alerts = repo.listAlerts({ status: 'open' }, 500)
     .filter((item) => !item.acknowledged_at).length;
   res.json(monitoring);
+});
+
+app.get('/api/monitoring/consumption', (req, res) => {
+  res.json(buildConsumptionDashboard(repo, normalizePeriod(req.query.period)));
 });
 
 app.get('/api/upstreams/:id/monitoring', (req, res) => {

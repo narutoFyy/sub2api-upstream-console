@@ -29,7 +29,32 @@ function createSite(input) {
       openai_rate, anthropic_rate, key_count, captured_at
     ) VALUES (?, ?, 'USD', ?, ?, ?, ?, ?, ?)
   `).run(site.id, input.balance, input.todayTokens || 0, input.todayCost || 0, input.openaiRate ?? null, input.anthropicRate ?? null, input.keys.length, minutesAgo(input.minutesAgo || 1));
+  const hourlySpend = Number(input.hourlySpend ?? Math.max(0.08, Number(input.todayCost || 0) / 24 || 0.24));
+  const insertHistory = db.prepare(`
+    INSERT INTO upstream_snapshot_history (upstream_site_id, balance, balance_currency, total_cost, today_cost, captured_at)
+    VALUES (?, ?, 'USD', ?, ?, ?)
+  `);
+  for (let hoursAgo = 30; hoursAgo >= 0; hoursAgo -= 1) {
+    const elapsed = 30 - hoursAgo;
+    insertHistory.run(
+      site.id,
+      Number(input.balance) + (30 - elapsed) * hourlySpend,
+      elapsed * hourlySpend,
+      Math.min(24, elapsed) * hourlySpend,
+      new Date(now.getTime() - hoursAgo * 60 * 60_000).toISOString()
+    );
+  }
   repo.reconcileKeySnapshots(site.id, input.keys, minutesAgo(2), { markMissing: true });
+  const groups = [...new Map(input.keys.map((key) => [String(key.group_id), key])).values()];
+  repo.replaceUpstreamProbeModels(site.id, groups.map((key) => ({
+    group_id: String(key.group_id),
+    group_name: key.group_name,
+    platform: key.platform,
+    discovery_status: 'live',
+    models: key.platform === 'anthropic'
+      ? [{ model: 'claude-3-5-haiku-latest', source: 'live' }, { model: 'claude-sonnet-4-5', source: 'live' }]
+      : [{ model: 'gpt-4.1-mini', source: 'live' }, { model: 'gpt-4.1', source: 'live' }]
+  })), minutesAgo(3));
   for (const key of input.keys) {
     repo.recordKeyConnectivityCheck(site.id, String(key.id), {
       status: key.connectivity || 'connected',

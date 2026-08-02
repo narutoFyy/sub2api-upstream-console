@@ -13,6 +13,7 @@ const VIEW_META = {
 const state = {
   activeView: localStorage.getItem('upstream-control-view') || 'monitoring',
   monitoring: { totals: {}, items: [], pushplus: { configured: false }, open_alerts: 0 },
+  consumption: { period: '24h', items: [], total_consumption: 0, selectedSiteId: null, loading: false, error: '' },
   alerts: [],
   logs: [],
   rateChanges: [],
@@ -199,6 +200,139 @@ function monitoringMetrics() {
   ];
 }
 
+function consumptionPeriodLabel(period = state.consumption.period) {
+  return { '24h': '过去 24 小时', '7d': '过去 7 天', '30d': '过去 30 天' }[period] || '过去 24 小时';
+}
+
+function consumptionForSite(siteId) {
+  return (state.consumption.items || []).find((item) => Number(item.id) === Number(siteId)) || null;
+}
+
+function consumptionAmountText(item) {
+  if (!item) return '-';
+  return `${item.estimated ? '约 ' : ''}$${numberText(item.consumption, '0')}`;
+}
+
+function consumptionSpeedText(item) {
+  if (!item?.enough_data || item.average_per_hour == null) return '数据不足';
+  if (state.consumption.period === '24h') return `$${numberText(item.average_per_hour, '0')} / 小时`;
+  return `$${numberText(item.average_per_day, '0')} / 天`;
+}
+
+function consumptionCoverageText(item) {
+  const hours = Number(item?.coverage_ms || 0) / 3_600_000;
+  if (!hours) return '尚无历史';
+  if (hours < 24) return `覆盖 ${numberText(hours, '0')} 小时`;
+  return `覆盖 ${numberText(hours / 24, '0')} 天`;
+}
+
+function runwayText(item) {
+  const hours = finiteNumberOrNull(item?.runway_hours);
+  if (!item?.enough_data) return '数据不足';
+  if (hours === null) return Number(item?.consumption || 0) === 0 ? '暂无消耗' : '-';
+  if (hours < 24) return `约 ${numberText(hours, '0')} 小时`;
+  return `约 ${numberText(hours / 24, '0')} 天`;
+}
+
+function chartTimeLabel(value, period) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return period === '24h'
+    ? date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+    : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+}
+
+function consumptionChartMarkup(item) {
+  const buckets = item?.buckets || [];
+  if (!buckets.length || !item.sample_count) return '<div class="empty-state compact-empty">该周期还没有趋势数据</div>';
+  const width = 640;
+  const left = 42;
+  const right = 12;
+  const top = 18;
+  const bottom = 184;
+  const plotWidth = width - left - right;
+  const step = plotWidth / buckets.length;
+  const consumptionMax = Math.max(0, ...buckets.map((bucket) => Number(bucket.consumption || 0)));
+  const balances = buckets.map((bucket) => finiteNumberOrNull(bucket.balance)).filter((value) => value !== null);
+  const balanceMin = balances.length ? Math.min(...balances) : 0;
+  const balanceMax = balances.length ? Math.max(...balances) : 0;
+  const balanceRange = Math.max(balanceMax - balanceMin, Math.abs(balanceMax || 1) * 0.02, 0.01);
+  const bars = buckets.map((bucket, index) => {
+    const height = consumptionMax > 0 ? Number(bucket.consumption || 0) / consumptionMax * 62 : 0;
+    return `<rect class="consumption-bar" x="${(left + index * step + step * 0.2).toFixed(2)}" y="${(bottom - height).toFixed(2)}" width="${Math.max(2, step * 0.6).toFixed(2)}" height="${height.toFixed(2)}"><title>${escapeHtml(chartTimeLabel(bucket.started_at, item.period))} · $${numberText(bucket.consumption, '0')}</title></rect>`;
+  }).join('');
+  const points = buckets.map((bucket, index) => {
+    const balance = finiteNumberOrNull(bucket.balance);
+    if (balance === null) return null;
+    const x = left + index * step + step / 2;
+    const y = top + ((balanceMax - balance) / balanceRange) * 92;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).filter(Boolean).join(' ');
+  const labels = [buckets[0], buckets[Math.floor((buckets.length - 1) / 2)], buckets.at(-1)];
+  return `<svg class="consumption-chart" viewBox="0 0 ${width} 216" role="img" aria-label="${escapeHtml(item.name)}余额折线和分时消耗柱状图">
+    <line class="chart-gridline" x1="${left}" y1="${top}" x2="${width - right}" y2="${top}"></line>
+    <line class="chart-gridline" x1="${left}" y1="110" x2="${width - right}" y2="110"></line>
+    <line class="chart-gridline" x1="${left}" y1="${bottom}" x2="${width - right}" y2="${bottom}"></line>
+    ${bars}<polyline class="balance-line" points="${points}"></polyline>
+    <text class="chart-axis-label" x="2" y="22">余额</text><text class="chart-axis-label" x="2" y="188">消耗</text>
+    ${labels.map((bucket, index) => `<text class="chart-axis-label chart-time-label label-${index}" x="${index === 0 ? left : index === 1 ? width / 2 : width - right}" y="208">${escapeHtml(chartTimeLabel(bucket.started_at, item.period))}</text>`).join('')}
+  </svg>`;
+}
+
+function filteredConsumptionItems() {
+  const visibleIds = new Set(filteredMonitoringSites().map((site) => Number(site.id)));
+  return (state.consumption.items || []).filter((item) => visibleIds.has(Number(item.id)));
+}
+
+function renderConsumptionDashboard() {
+  document.querySelectorAll('[data-consumption-period]').forEach((button) => button.classList.toggle('active', button.dataset.consumptionPeriod === state.consumption.period));
+  const ranking = document.querySelector('#consumptionRanking');
+  const detail = document.querySelector('#consumptionDetail');
+  const summary = document.querySelector('#consumptionBoardSummary');
+  if (state.consumption.loading) {
+    summary.textContent = `${consumptionPeriodLabel()} · 正在更新`;
+    ranking.innerHTML = '<div class="empty-state compact-empty">正在读取消耗数据...</div>';
+    detail.innerHTML = '<div class="empty-state compact-empty">正在生成趋势...</div>';
+    return;
+  }
+  if (state.consumption.error) {
+    summary.textContent = `${consumptionPeriodLabel()} · 读取失败`;
+    ranking.innerHTML = `<div class="empty-state compact-empty danger-text">${escapeHtml(state.consumption.error)}</div>`;
+    detail.innerHTML = '<div class="empty-state compact-empty">趋势暂不可用</div>';
+    return;
+  }
+  const visible = filteredConsumptionItems();
+  summary.textContent = `${consumptionPeriodLabel()} · 总消耗 $${numberText(visible.reduce((total, item) => total + Number(item.consumption || 0), 0), '0')}`;
+  if (!visible.length) {
+    ranking.innerHTML = '<div class="empty-state compact-empty">没有匹配的上游</div>';
+    detail.innerHTML = '<div class="empty-state compact-empty">没有可展示的趋势</div>';
+    return;
+  }
+  if (!visible.some((item) => Number(item.id) === Number(state.consumption.selectedSiteId))) state.consumption.selectedSiteId = visible[0].id;
+  const top = visible.slice(0, 10);
+  const max = Math.max(0, ...top.map((item) => Number(item.consumption || 0)));
+  ranking.innerHTML = top.map((item) => `<button class="consumption-rank-row ${Number(item.id) === Number(state.consumption.selectedSiteId) ? 'active' : ''}" type="button" data-consumption-site="${item.id}">
+    <span class="consumption-rank-name">${escapeHtml(item.name)}</span><span class="consumption-track"><i style="width:${max > 0 ? Math.max(3, Number(item.consumption || 0) / max * 100) : 0}%"></i></span><strong>${escapeHtml(consumptionAmountText(item))}</strong><small>${escapeHtml(consumptionSpeedText(item))}</small>
+  </button>`).join('');
+  const selected = visible.find((item) => Number(item.id) === Number(state.consumption.selectedSiteId)) || visible[0];
+  detail.innerHTML = `<div class="consumption-detail-head"><div><h3>${escapeHtml(selected.name)}</h3><span class="muted">${escapeHtml(consumptionCoverageText(selected))}${selected.estimated ? ' · 余额估算' : ' · 实际成本'}</span></div><div class="consumption-detail-balance"><span>当前余额</span><strong>${selected.current_balance == null ? '-' : `$${numberText(selected.current_balance)}`}</strong></div></div>${consumptionChartMarkup(selected)}<div class="chart-legend"><span><i class="legend-line"></i>余额</span><span><i class="legend-bar"></i>分时消耗</span><span>预计可用 ${escapeHtml(runwayText(selected))}</span></div>`;
+}
+
+async function loadConsumption({ quiet = false } = {}) {
+  state.consumption.loading = true;
+  state.consumption.error = '';
+  if (!quiet) renderConsumptionDashboard();
+  try {
+    const result = await api(`/api/monitoring/consumption?period=${encodeURIComponent(state.consumption.period)}`);
+    state.consumption = { ...state.consumption, ...result, loading: false, error: '' };
+  } catch (error) {
+    state.consumption.items = [];
+    state.consumption.loading = false;
+    state.consumption.error = error.message;
+  }
+  renderConsumptionDashboard();
+}
+
 function isLowBalance(site) {
   const balance = finiteNumberOrNull(site.balance);
   return balance !== null && balance < Number(site.low_balance_threshold || 10);
@@ -259,6 +393,7 @@ function filteredMonitoringSites() {
   });
   return items.sort((a, b) => {
     if (state.monitorSort === 'balance-desc') return Number(b.balance ?? -Infinity) - Number(a.balance ?? -Infinity);
+    if (state.monitorSort === 'consumption-desc') return Number(consumptionForSite(b.id)?.consumption || 0) - Number(consumptionForSite(a.id)?.consumption || 0);
     if (state.monitorSort === 'abnormal-desc') return Number(b.key_abnormal_count || 0) - Number(a.key_abnormal_count || 0);
     if (state.monitorSort === 'name-asc') return String(a.name).localeCompare(String(b.name), 'zh-CN');
     return Number(a.balance ?? Infinity) - Number(b.balance ?? Infinity);
@@ -273,16 +408,21 @@ function renderMonitoring() {
   document.querySelector('#segmentLowCount').textContent = totals.low_balance || 0;
   document.querySelector('#segmentKeyErrorCount').textContent = totals.key_abnormal || 0;
   document.querySelectorAll('[data-monitor-status]').forEach((button) => button.classList.toggle('active', button.dataset.monitorStatus === state.monitorStatus));
+  renderConsumptionDashboard();
 
   const rows = filteredMonitoringSites().map((site) => {
     const expanded = state.expandedSites.has(Number(site.id));
     const health = siteHealth(site);
     const balanceClass = isLowBalance(site) ? 'low' : '';
     const syncError = syncErrorPresentation(site.last_sync_error);
+    const consumption = consumptionForSite(site.id);
     return `
       <tr class="data-row">
         <td><div class="upstream-name-cell"><button class="row-chevron ${expanded ? 'expanded' : ''}" type="button" data-toggle-site="${site.id}" aria-label="展开 ${escapeHtml(site.name)}"><i data-lucide="chevron-right"></i></button><div class="upstream-identity"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></div></td>
         <td><strong class="balance-value ${balanceClass}">${site.balance == null ? '-' : `$${numberText(site.balance)}`}</strong><span class="balance-meta ${site.balance_stale ? 'warning-text' : ''}">${site.balance_stale ? '数据已过期 · ' : ''}${ageText(site.balance_age_ms)}</span></td>
+        <td><div class="cell-stack consumption-cell"><strong>${escapeHtml(consumptionAmountText(consumption))}</strong><small>${escapeHtml(consumptionCoverageText(consumption))}</small></div></td>
+        <td><div class="cell-stack consumption-cell"><strong>${escapeHtml(consumptionSpeedText(consumption))}</strong><small>${consumption?.estimated ? '余额变化估算' : consumption ? '实际成本' : '-'}</small></div></td>
+        <td><strong class="numeric">${escapeHtml(runwayText(consumption))}</strong></td>
         <td><span class="status-label"><span class="status-dot ${health.dot}"></span><span>${escapeHtml(health.label)}</span></span></td>
         <td><span class="numeric">${site.key_count || 0} 个 Key</span></td>
         <td class="numeric ${site.key_abnormal_count ? 'danger-text' : ''}">${site.key_abnormal_count || 0}</td>
@@ -292,11 +432,15 @@ function renderMonitoring() {
       ${expanded ? renderExpandedKeys(site) : ''}
     `;
   }).join('');
-  document.querySelector('#monitoringRows').innerHTML = rows || '<tr><td colspan="7"><div class="empty-state">没有匹配的上游</div></td></tr>';
+  document.querySelector('#monitoringRows').innerHTML = rows || '<tr><td colspan="10"><div class="empty-state">没有匹配的上游</div></td></tr>';
 }
 
 function renderExpandedKeys(site) {
   const keys = (site.keys || []).filter((key) => key.import_state !== 'missing');
+  const modelSync = site.model_sync || {};
+  const modelSyncText = modelSync.status === 'never'
+    ? '模型尚未同步'
+    : `${timeText(modelSync.synced_at)}同步 · ${modelSync.model_count || 0} 个模型 · ${modelSync.group_count || 0} 个分组${['partial', 'failed', 'stale'].includes(modelSync.status) ? ' · 有异常' : ''}`;
   const body = keys.map((key) => {
     const connectivity = connectivityMeta(key);
     const failed = connectivity.tone === 'danger';
@@ -309,8 +453,8 @@ function renderExpandedKeys(site) {
       <td class="align-right"><button class="icon-btn" type="button" data-check-key="${escapeHtml(key.upstream_key_id)}" data-site-id="${site.id}" title="立即检测"><i data-lucide="activity"></i></button></td>
     </tr>`;
   }).join('');
-  return `<tr class="expanded-row"><td colspan="7"><div class="expanded-panel">
-    <div class="expanded-header"><strong>${escapeHtml(site.name)} · Key 明细</strong><div class="expanded-actions"><button class="btn secondary" type="button" data-import-keys="${site.id}"><i data-lucide="download"></i>导入全部 Key</button><button class="btn primary" type="button" data-check-site-keys="${site.id}"><i data-lucide="activity"></i>立即检测</button></div></div>
+  return `<tr class="expanded-row"><td colspan="10"><div class="expanded-panel">
+    <div class="expanded-header"><div class="expanded-title"><strong>${escapeHtml(site.name)} · Key 明细</strong><small class="${['partial', 'failed', 'stale'].includes(modelSync.status) ? 'warning-text' : ''}">${escapeHtml(modelSyncText)}</small></div><div class="expanded-actions"><button class="btn secondary" type="button" data-sync-site-models="${site.id}"><i data-lucide="refresh-cw"></i>同步模型</button><button class="btn secondary" type="button" data-import-keys="${site.id}"><i data-lucide="download"></i>导入全部 Key</button><button class="btn primary" type="button" data-check-site-keys="${site.id}"><i data-lucide="activity"></i>立即检测</button></div></div>
     <div class="key-inner-wrap"><table class="data-table key-inner-table"><thead><tr><th>Key 名称</th><th>Key</th><th>所属分组</th><th>平台</th><th>倍率</th><th>检测模型</th><th>联通性</th><th>最近检测</th><th class="align-right">操作</th></tr></thead><tbody>${body || '<tr><td colspan="9"><div class="empty-state">还没有导入 Key</div></td></tr>'}</tbody></table></div>
   </div></td></tr>`;
 }
@@ -733,8 +877,9 @@ async function openUsageDetail(usageId) {
 async function refreshAll({ quiet = false } = {}) {
   if (!quiet) setBusy(true);
   try {
-    const [monitoring, alerts, logs, rateChanges, pricing, ownSites, ownRoutes, runtimeSettings, systemUpdate] = await Promise.all([
+    const [monitoring, consumption, alerts, logs, rateChanges, pricing, ownSites, ownRoutes, runtimeSettings, systemUpdate] = await Promise.all([
       api('/api/monitoring/upstreams'),
+      api(`/api/monitoring/consumption?period=${encodeURIComponent(state.consumption.period)}`).catch((error) => ({ items: [], total_consumption: 0, error: error.message })),
       api('/api/alerts'),
       api('/api/sync-logs'),
       api('/api/rate-changes'),
@@ -745,6 +890,7 @@ async function refreshAll({ quiet = false } = {}) {
       api('/api/system/update').catch(() => ({ enabled: false, message: '版本状态读取失败', operation: { phase: 'failed' } }))
     ]);
     state.monitoring = monitoring;
+    state.consumption = { ...state.consumption, ...consumption, loading: false, error: consumption.error || '' };
     state.alerts = alerts.items || [];
     state.logs = logs.items || [];
     state.rateChanges = rateChanges.items || [];
@@ -1218,12 +1364,19 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.action === 'copy-created-key') { await navigator.clipboard.writeText(state.createdKey); return toast('Key 已复制', 'success'); }
   if (target.dataset.copyText) { await navigator.clipboard.writeText(target.dataset.copyText); return toast('已复制', 'success'); }
   if (target.dataset.monitorStatus) { state.monitorStatus = target.dataset.monitorStatus; renderMonitoring(); refreshIcons(); return; }
+  if (target.dataset.consumptionPeriod) { state.consumption.period = target.dataset.consumptionPeriod; await loadConsumption(); return; }
+  if (target.dataset.consumptionSite) { state.consumption.selectedSiteId = Number(target.dataset.consumptionSite); renderConsumptionDashboard(); return; }
   if (target.dataset.toggleSite) { const id = Number(target.dataset.toggleSite); state.expandedSites.has(id) ? state.expandedSites.delete(id) : state.expandedSites.add(id); renderMonitoring(); refreshIcons(); return; }
   if (target.dataset.toggleKeySite) { const id = Number(target.dataset.toggleKeySite); state.expandedKeySites.has(id) ? state.expandedKeySites.delete(id) : state.expandedKeySites.add(id); renderGlobalKeys(); refreshIcons(); return; }
   if (target.dataset.detailSite) return openDetail(Number(target.dataset.detailSite));
   if (target.dataset.usageDetail) return openUsageDetail(target.dataset.usageDetail);
   if (target.dataset.editFromDetail) { closeDialog('detailDialog'); return openUpstreamDialog(Number(target.dataset.editFromDetail)); }
   if (target.dataset.syncSite) return runAction(target, '同步中', async () => { await api(`/api/upstreams/${target.dataset.syncSite}/sync`, { method: 'POST' }); await refreshAll({ quiet: true }); toast('上游同步完成', 'success'); });
+  if (target.dataset.syncSiteModels) return runAction(target, '同步中', async () => {
+    const result = await api(`/api/upstreams/${target.dataset.syncSiteModels}/models/sync`, { method: 'POST' });
+    await refreshAll({ quiet: true });
+    toast(`模型同步完成：${result.groups || 0} 个分组，${(result.items || []).reduce((total, group) => total + (group.models || []).length, 0)} 个候选`, 'success');
+  });
   if (target.dataset.importKeys) return runAction(target, '导入中', async () => { const result = await api(`/api/upstreams/${target.dataset.importKeys}/keys/import`, { method: 'POST' }); await refreshAll({ quiet: true }); toast(result.message, 'success'); });
   if (target.dataset.checkSiteKeys) return runAction(target, '检测中', async () => { const result = await api(`/api/upstreams/${target.dataset.checkSiteKeys}/keys/check`, { method: 'POST' }); await refreshAll({ quiet: true }); toast(`检测 ${result.checked} 个 Key，联通 ${result.connected}，异常 ${result.failed}`, result.failed ? 'error' : 'success'); });
   if (target.dataset.checkKey) return runAction(target, '检测中', async () => { await api(`/api/upstreams/${target.dataset.siteId}/keys/${encodeURIComponent(target.dataset.checkKey)}/check`, { method: 'POST' }); await refreshAll({ quiet: true }); toast('Key 检测完成', 'success'); });

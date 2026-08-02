@@ -1139,6 +1139,17 @@ function keySnapshotInput(siteId, key, capturedAt) {
   };
 }
 
+function listSnapshotHistoryRange(siteId, since, limit = 100000) {
+  const safeLimit = Math.min(100000, Math.max(1, Number.parseInt(limit, 10) || 100000));
+  return db.prepare(`
+    SELECT captured_at, balance, total_cost
+    FROM upstream_snapshot_history
+    WHERE upstream_site_id = ? AND captured_at >= ?
+    ORDER BY captured_at ASC, id ASC
+    LIMIT ?
+  `).all(siteId, String(since || ''), safeLimit);
+}
+
 function keySnapshotChanged(previous, next) {
   const fields = [
     'name', 'key_masked', 'group_id', 'group_name', 'platform', 'group_rate',
@@ -1968,6 +1979,7 @@ module.exports = {
   saveSyncLog,
   getSnapshot,
   listSnapshotHistory,
+  listSnapshotHistoryRange,
   listRates,
   getDetailPricingSummary,
   listModelPricing,

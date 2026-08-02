@@ -13,6 +13,20 @@ function siteFreshness(site, now = Date.now()) {
 function buildUpstreamMonitoring(repository = repo, now = Date.now()) {
   const items = repository.listSites().map((site) => {
     const modelGroups = repository.listUpstreamProbeModels?.(site.id) || [];
+    const syncedAt = modelGroups.map((group) => group.synced_at).filter(Boolean).sort().at(-1) || null;
+    const uniqueModels = new Set(modelGroups.flatMap((group) => (group.models || []).map((item) => item.model).filter(Boolean)));
+    const unavailableGroups = modelGroups.filter((group) => group.discovery_status === 'unavailable').length;
+    const staleGroups = modelGroups.filter((group) => group.discovery_status === 'stale').length;
+    const errorGroups = modelGroups.filter((group) => String(group.discovery_error || '').trim()).length;
+    const modelSyncStatus = !modelGroups.length
+      ? 'never'
+      : uniqueModels.size === 0
+        ? 'failed'
+        : unavailableGroups || errorGroups
+          ? 'partial'
+          : staleGroups
+            ? 'stale'
+            : 'success';
     const modelsByGroup = new Map(modelGroups.map((group) => [
       String(group.group_id),
       (group.models || []).map((item) => item.model).filter(Boolean)
@@ -53,6 +67,15 @@ function buildUpstreamMonitoring(repository = repo, now = Date.now()) {
       key_count: activeKeys.length,
       key_abnormal_count: abnormalKeys,
       key_untested_count: untestedKeys,
+      model_sync: {
+        status: modelSyncStatus,
+        synced_at: syncedAt,
+        group_count: modelGroups.length,
+        model_count: uniqueModels.size,
+        unavailable_groups: unavailableGroups,
+        stale_groups: staleGroups,
+        error_groups: errorGroups
+      },
       keys
     };
   });

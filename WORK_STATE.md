@@ -94,6 +94,7 @@
 ## Current Goal: Multiple PushPlus Targets
 
 Status: complete
+
 Mode: `state-main`
 Topology: `linear`
 
@@ -113,6 +114,7 @@ Evidence: `npm test` passed 59/59; JavaScript syntax checks and `git diff --chec
 ## Current Goal: Balance confirmation and per-Key scheduled probes
 
 Status: complete
+
 Mode: state-main
 Topology: linear
 Git baseline: clean before this goal; prior user history preserved
@@ -153,3 +155,52 @@ Verification evidence: Focused balance-path tests passed 32/32. The full suite p
 Production evidence: SQLite backup `/var/backups/sub2api-upstream-console/20260802T013226Z/upstream-console.sqlite` passed `PRAGMA integrity_check`. Production advanced to `fb0ad740eb46befeec963d739c5bc5b832abf205` (v1.8.4), restarted successfully, `/api/health` returned HTTP 200, and the latest five Dream syncs all succeeded with balance `7.2459463` and zero sync failures.
 
 Status: complete
+
+## Current Goal: Homepage upstream consumption and model testing
+
+Status: implementing
+Mode: `state-main`
+Topology: `linear`
+Git baseline: clean `main` at `fb0ad74`; upload target confirmed as `origin/main`
+
+Outcome: Make the monitoring homepage show each upstream's balance consumption, burn speed, and runway across 24-hour, 7-day, and 30-day periods, while surfacing model synchronization beside the existing per-Key model selector and explicit connectivity test.
+
+Confirmed decisions:
+
+- Preserve the current dollar-style balance display without currency conversion.
+- Persist a Key's selected model, but send a real probe only after an explicit "立即检测" action.
+- Reuse snapshot history, model discovery, and connectivity services; use lightweight native SVG/CSS rather than adding a chart dependency.
+
+Scope and non-goals:
+
+- Allowed writes: relevant `src/`, `public/`, `test/`, `WORK_STATE.md`, and documentation only when required for changed behavior.
+- Do not change real Key status, create/delete real Keys, add currency conversion, change snapshot retention policy, or make model selection trigger inference.
+- Real upstream model/probe behavior is verified only when an already-configured non-critical fixture is safely available.
+
+Tasks:
+
+- T-001 trend aggregation and API: done
+- T-002 homepage consumption UI: done
+- T-003 homepage model sync and Key probe workflow: done
+- T-004 regression, browser, real-environment verification, and upload: done
+
+T-001 pressure check: Tests could pass while recharge jumps, cumulative-cost resets, or partial coverage produce misleading speed and runway values. The implementation must distinguish cost-derived data from balance estimates, ignore negative cumulative deltas, report actual coverage, and withhold derived values when fewer than two valid samples or less than one hour of coverage exist.
+
+T-001 evidence: Focused trend and monitoring tests passed 8/8. Syntax checks and `git diff --check` passed. The API returns fixed 24/28/30-bucket payloads, actual coverage, cost-versus-estimate provenance, and null speed/runway for insufficient data.
+
+T-002 pressure check: Adding several metrics to the dense monitoring page could bury the main Key workflow or create mobile overflow. Keep comparison charts compact, make one upstream detail selected at a time, preserve the existing expandable table, and constrain wide content to its existing scroll boundary.
+
+T-002 evidence: The monitoring page now renders a responsive period selector, Top 10 comparison, single-upstream SVG balance/consumption chart, coverage/provenance, and complete table metrics. JavaScript syntax, focused tests, and diff checks pass; browser verification remains in T-004.
+
+T-003 pressure check: A successful model endpoint call could still leave stale selectors if the monitoring payload lacks persisted sync metadata, while auto-probing on selection would violate the confirmed paid-request boundary. Persisted catalog state must be summarized in monitoring, explicit model sync must refresh selectors without collapsing the site, and selection must remain a save-only action.
+
+T-003 evidence: Related model, connectivity, monitoring, repository, and trend tests passed 38/38. Monitoring now exposes persisted model count, group count, sync time, and partial/stale status. The expanded homepage row has an explicit model-sync action; the existing model selector remains save-only and the existing activity button remains the sole manual probe trigger.
+
+T-004 pressure check: A clean unit suite could still hide broken SVG geometry, table colspan errors, mobile page overflow, or an authenticated fixture that accidentally reaches real upstreams. Browser checks must run against an isolated database with both schedulers hard-disabled, exercise period/site/expand interactions, and inspect console, network, and viewport overflow before upload.
+
+T-004 evidence: Full `npm test` passed 88/88. All JavaScript syntax checks and `git diff --check` passed. The isolated fixture browser rendered the non-empty SVG chart, switched to 7 days, selected an upstream, and expanded its Key panel with the homepage model-sync action; page-level horizontal overflow was false, and the browser reported no warning/error logs. The 30-day API returned 4 upstreams with 30 buckets each. No real upstream or paid probe was used.
+
+## Completion
+
+Status: complete
+Delivery: committed and pushed to `origin/main` after final review.
