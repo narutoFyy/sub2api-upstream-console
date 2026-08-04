@@ -438,7 +438,7 @@ function renderMonitoring() {
         <td><span class="numeric">${site.key_count || 0} 个 Key</span></td>
         <td class="numeric ${site.key_abnormal_count ? 'danger-text' : ''}">${site.key_abnormal_count || 0}</td>
         <td><div class="cell-stack sync-cell"><span>${timeText(site.last_sync_at)}</span>${syncError.full ? `<small class="danger-text sync-error" title="${escapeHtml(syncError.full)}">${escapeHtml(syncError.summary)}</small>` : ''}</div></td>
-        <td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-sync-site="${site.id}" title="同步余额和 Key"><i data-lucide="refresh-cw"></i></button><button class="icon-btn" type="button" data-sync-site-models="${site.id}" title="同步支持模型"><i data-lucide="boxes"></i></button><button class="icon-btn" type="button" data-detail-site="${site.id}" title="详情"><i data-lucide="ellipsis-vertical"></i></button></div></td>
+        <td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-sync-site="${site.id}" title="同步余额和 Key"><i data-lucide="refresh-cw"></i></button><button class="icon-btn" type="button" data-sync-site-models="${site.id}" title="同步支持模型"><i data-lucide="boxes"></i></button><button class="icon-btn" type="button" data-detail-site="${site.id}" title="详情"><i data-lucide="ellipsis-vertical"></i></button><button class="icon-btn danger-text" type="button" data-delete-upstream="${site.id}" data-upstream-name="${escapeHtml(site.name)}" title="永久删除"><i data-lucide="trash-2"></i></button></div></td>
       </tr>
       ${expanded ? renderExpandedKeys(site) : ''}
     `;
