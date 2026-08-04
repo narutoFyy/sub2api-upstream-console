@@ -1013,7 +1013,8 @@ async function openDetail(siteId) {
     const methods = Array.isArray(snapshot.payment_methods) ? snapshot.payment_methods.filter((item) => item?.available !== false) : [];
     document.querySelector('#detailContent').innerHTML = `
       <div class="detail-metrics"><div class="detail-metric"><span>余额</span><strong>${finiteNumberOrNull(snapshot.balance) === null ? '-' : `$${numberText(snapshot.balance)}`}</strong></div><div class="detail-metric"><span>今日 Token</span><strong>${tokenText(snapshot.today_tokens)}</strong></div><div class="detail-metric"><span>今日成本</span><strong>$${numberText(snapshot.today_cost)}</strong></div><div class="detail-metric"><span>OpenAI 倍率</span><strong>${rateText(snapshot.openai_rate)}</strong></div><div class="detail-metric"><span>Anthropic 倍率</span><strong>${rateText(snapshot.anthropic_rate)}</strong></div><div class="detail-metric"><span>Key</span><strong>${snapshot.key_count || 0}</strong></div></div>
-      <div class="detail-block"><div class="button-group"><button class="btn secondary" data-edit-from-detail="${site.id}"><i data-lucide="pencil"></i>编辑上游</button><button class="btn secondary" data-import-keys="${site.id}"><i data-lucide="download"></i>导入 Key</button><button class="btn primary" data-check-site-keys="${site.id}"><i data-lucide="activity"></i>检测 Key</button></div></div>
+      <div class="detail-block"><div class="button-group"><button class="btn secondary" data-edit-from-detail="${site.id}"><i data-lucide="pencil"></i>编辑上游</button><button class="btn secondary" data-toggle-upstream="${site.id}" data-next-status="${site.status === 'disabled' ? 'active' : 'disabled'}"><i data-lucide="${site.status === 'disabled' ? 'play' : 'pause'}"></i>${site.status === 'disabled' ? '启用上游' : '停用上游'}</button><button class="btn secondary" data-import-keys="${site.id}"><i data-lucide="download"></i>导入 Key</button><button class="btn primary" data-check-site-keys="${site.id}"><i data-lucide="activity"></i>检测 Key</button></div></div>
+      <div class="detail-block danger-zone"><h3>永久删除</h3><p class="muted">会删除该上游的本地凭据、快照、Key、倍率历史、同步日志和告警，不能从控制台撤销。</p><button class="btn danger-outline" data-delete-upstream="${site.id}" data-upstream-name="${escapeHtml(site.name)}"><i data-lucide="trash-2"></i>永久删除上游</button></div>
       <div class="detail-block"><h3>能力状态</h3><div class="detail-list">${Object.entries(detail.capabilities || {}).filter(([key]) => key !== 'errors').map(([key, value]) => `<div class="detail-line"><span>${escapeHtml(key)}</span><strong class="${value ? 'healthy-text' : 'muted'}">${value ? '可用' : '不可用'}</strong></div>`).join('')}</div></div>
       <div class="detail-block"><h3>分组倍率</h3><div class="detail-list">${(detail.rates || []).slice(0, 20).map((rate) => `<div class="detail-line"><span>${escapeHtml(rate.group_name || rate.group_id)}</span><strong>${rateText(rate.rate)}</strong></div>`).join('') || '<div class="empty-state">暂无倍率</div>'}</div></div>
       ${snapshot.payment_enabled && methods.length ? `<div class="detail-block"><h3>上游充值</h3><div class="form-grid"><label><span>充值金额</span><input id="detailRechargeAmount" type="number" min="1" value="10" /></label><label><span>支付方式</span><select id="detailRechargeMethod">${methods.map((item) => `<option value="${escapeHtml(item.type)}">${escapeHtml(item.name || item.type)}</option>`).join('')}</select></label></div><div class="modal-actions"><button class="btn primary" data-create-recharge="${site.id}">创建充值订单</button></div><div id="detailRechargeResult"></div></div>` : ''}
@@ -1404,6 +1405,27 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.detailSite) return openDetail(Number(target.dataset.detailSite));
   if (target.dataset.usageDetail) return openUsageDetail(target.dataset.usageDetail);
   if (target.dataset.editFromDetail) { closeDialog('detailDialog'); return openUpstreamDialog(Number(target.dataset.editFromDetail)); }
+  if (target.dataset.toggleUpstream) return runAction(target, '处理中', async () => {
+    const nextStatus = target.dataset.nextStatus;
+    await api(`/api/upstreams/${target.dataset.toggleUpstream}/status`, { method: 'POST', body: JSON.stringify({ status: nextStatus }) });
+    closeDialog('detailDialog');
+    await refreshAll({ quiet: true });
+    toast(nextStatus === 'disabled' ? '上游已停用' : '上游已启用', 'success');
+  });
+  if (target.dataset.deleteUpstream) {
+    const id = target.dataset.deleteUpstream;
+    const name = target.dataset.upstreamName || '该上游';
+    if (!confirm(`确定永久删除“${name}”？这会清除本地凭据、快照、Key、日志和告警。`)) return;
+    if (!confirm(`再次确认永久删除“${name}”？此操作无法在控制台撤销。`)) return;
+    return runAction(target, '删除中', async () => {
+      await api(`/api/upstreams/${id}`, { method: 'DELETE' });
+      closeDialog('detailDialog');
+      state.expandedSites.delete(Number(id));
+      if (String(state.usage.upstreamId) === String(id)) state.usage.upstreamId = '';
+      await refreshAll({ quiet: true });
+      toast('上游已永久删除', 'success');
+    });
+  }
   if (target.dataset.syncSite) return runAction(target, '同步中', async () => { await api(`/api/upstreams/${target.dataset.syncSite}/sync`, { method: 'POST' }); await refreshAll({ quiet: true }); toast('上游同步完成', 'success'); });
   if (target.dataset.syncSiteModels) return runAction(target, '同步中', async () => {
     const result = await api(`/api/upstreams/${target.dataset.syncSiteModels}/models/sync`, { method: 'POST' });

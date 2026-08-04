@@ -532,7 +532,10 @@ app.put('/api/upstreams/:id', (req, res, next) => {
 });
 
 app.delete('/api/upstreams/:id', (req, res) => {
-  res.json({ deleted: repo.deleteSite(Number(req.params.id)) });
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid upstream id' });
+  if (!repo.getSite(id)) return res.status(404).json({ error: 'Not found' });
+  res.json({ deleted: repo.deleteSite(id), id });
 });
 
 app.get('/api/monitoring/upstreams', (req, res) => {

@@ -80,7 +80,7 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 
 ### 上游管理
 
-- 新增、编辑、删除上游站点。
+- 新增、编辑上游站点；支持停用/启用和需要二次确认的永久删除。永久删除只清理本地控制台数据，并会级联移除凭据、快照、Key、日志和告警，执行前应先备份数据库。
 - 新增上游类型选择，支持 `自动识别`、`Sub2API`、`new-api`。
 - 自动识别入口域名背后的真实 API 域名，兼容首页跳转到 `sub2` 子域名或导航页指向 `api` 子域名的站点。
 - 支持账号密码、Token、管理员 Token 等接入模式。
@@ -100,7 +100,7 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 - 展示余额、今日/近 7 天/近 30 天用量、成本、API Key 数量、渠道数量和分组倍率。
 - 上游列表按平台展示 **OpenAI / Anthropic 最低倍率**，直接读取 Sub2API 分组 `scope`，无需手动配置识别词。
 - 对 `new-api` 上游支持读取用户订阅摘要，包括订阅状态、计费偏好、到期时间、总额度、已用额度、剩余额度和使用百分比。
-- 对 `new-api` 上游支持读取模型广场官方倍率，优先使用 `/api/pricing`，并可用 `/api/ratio_config` 兜底。
+- 对 `new-api` 上游支持读取模型广场官方倍率，优先使用 `/api/pricing`，并可用 `/api/ratio_config` 兜底；当 ratio config 被权限拒绝时保留 pricing 结果并记录警告。
 - 对 `sub2api` / `auto` 上游支持读取 `openai` / `anthropic` 分组倍率，并按官方原价（或内置基准价）换算成模型实际价格。
 - 保存历史快照，展示余额和用量趋势。
 - 上游监控主页支持 24 小时、7 天、30 天消耗排行，展示实际成本或余额估算、消耗速度和预计可用时间；充值和累计成本重置不会被计为负消耗。
@@ -137,7 +137,7 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 - 支持 SQLite 数据库备份。
 - 基础 SSRF 防护，阻止 localhost、内网和 metadata 地址。
 - 支持 Sub2API `/api/v1` 与 `/api` 路径兜底。
-- 支持 QuantumNous/new-api 的 `/api/user/login`、`/api/user/self`、`/api/user/self/groups`、`/api/token/`、`/api/log/self/stat` 和 `/api/subscription/self` 等接口。
+- 支持 QuantumNous/new-api 的 `/api/user/login`、`/api/user/self`、`/api/user/self/groups`、`/api/token/`、`/api/log/self/stat` 和 `/api/subscription/self` 等接口；兼容常见 `code: 200` 登录响应、Cookie/Token 会话、分页 Key、数组分组和数字 Key 状态。目标站点若只返回 `rpm/tpm` 统计速率，不会将其误报为周期请求量或 Token 总量。
 
 ### API Key 聚合管理
 
@@ -205,6 +205,12 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 Key 自动探测会向真实模型端点发送最小请求，允许产生极低但非零的消费。检测模型候选不会自动更新，只在上游编辑页手动点击“同步模型”时刷新并保存到本地；下次手动同步前继续使用当前缓存。
 
 ## 更新说明
+
+### v1.8.5 - 2026-08-04
+
+- 增加上游停用/启用和二次确认的永久删除流程，永久删除只清理本地控制台数据。
+- 增强 New API 兼容：支持常见登录响应、分页 Key、数组分组、数字 Key 状态和更多统计字段别名。
+- 增加删除级联和 New API 响应结构回归测试。
 
 ### v1.8.2 - 2026-07-22
 

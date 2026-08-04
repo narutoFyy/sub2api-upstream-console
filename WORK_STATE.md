@@ -134,7 +134,7 @@ Evidence: T-001 focused migration/repository tests passed 12/12. T-002 sync/aler
 
 ## Current Goal: Strict balance validity and false recovery prevention
 
-Status: implementing
+Status: complete
 Mode: state-main
 Topology: linear
 Git baseline: clean commit `fe26fe8`; production runs the same commit
@@ -204,3 +204,47 @@ T-004 evidence: Full `npm test` passed 88/88. All JavaScript syntax checks and `
 
 Status: complete
 Delivery: committed and pushed to `origin/main` after final review.
+
+## Current Goal: Safe upstream deletion and target New API compatibility
+
+Status: complete
+Mode: `state-main`
+Topology: `linear`
+Git baseline: clean at `f0020c4`; no pre-existing worktree changes
+
+Outcome: Keep upstream removal reversible by default, require explicit confirmation for permanent local deletion, and improve compatibility with the user-provided New API site without changing remote state.
+
+Confirmed decisions:
+
+- T-001: expose existing reversible `active`/`disabled` status and add a two-step permanent deletion flow.
+- T-002: prioritize `https://new.178266.xyz` and common response variations rather than all New API forks.
+- T-003: use the supplied account only for an isolated, read-only real sync; never persist credentials or mutate remote resources.
+
+Scope and non-goals:
+
+- Allowed writes: relevant `src/`, `public/`, `test/`, `README.md`, `TODO_CN.md`, and this state record.
+- Do not create, delete, or modify remote Keys, subscriptions, payments, or account data.
+- Do not add a broad fork-specific compatibility matrix without evidence from the target site.
+
+Tasks:
+
+- T-001 deletion workflow: done
+- T-002 New API adapter compatibility: done
+- T-003 regression and isolated verification: done
+- T-004 real read-only sync, documentation, and final review: done
+
+T-001 pressure check: permanent deletion must not be discoverable as a routine edit action, and local cascade behavior must be proven for credentials and telemetry. The UI uses a separate danger zone with two confirmations; the API validates the ID and returns 404 for a missing site. Focused verification is the cascade test and frontend/API syntax review.
+
+T-001 evidence: `test/upstreamDeletion.test.js` passed; isolated HTTP flow created, disabled, deleted, repeated delete (404), and confirmed monitoring cleanup.
+
+T-002 pressure check: broad New API fork support could obscure the target site's actual response shape. The adapter extends existing paths only where fixture and target evidence support it, keeps quota-only stats distinct from request/token totals, and maps numeric Key status into the existing UI contract.
+
+T-002 evidence: fixture tests cover code 200, array groups, paginated Keys, usage aliases, and numeric statuses. Real target sync succeeded on New API `v1.0.0-rc.23`; `/api/pricing` returned usable pricing, `/api/ratio_config` returned 403 and was retained as a warning.
+
+T-003 evidence: full `npm test` passed 92/92; JavaScript syntax checks and `git diff --check` passed.
+
+T-004 delivery note: the execution environment DNS maps public hosts to `198.18.0.0/15`, which the production SSRF guard correctly rejects. Real validation used a temporary process-only DNS precheck override for the supplied public hostname; production code and its guard were not weakened. No remote mutation was performed.
+
+T-004 evidence: final real read-only sync returned provider `new-api`, one Key normalized to `active`, three rates, sixteen pricing items, a numeric balance, and one expected `/ratio_config` warning. No server process was left running and no credentials were written to the repository.
+
+Completion: complete

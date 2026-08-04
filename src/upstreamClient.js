@@ -171,8 +171,12 @@ async function requestJson(baseUrl, path, options = {}) {
   if (!res.ok) {
     throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
   }
-  if (payload && typeof payload === 'object' && payload.code && payload.code !== 0) {
-    throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
+  if (payload && typeof payload === 'object' && payload.code !== undefined && payload.code !== null && payload.code !== '') {
+    const code = Number(payload.code);
+    const codeIsSuccess = payload.code === 0 || payload.code === '0' || payload.code === 200 || payload.code === '200';
+    if (!codeIsSuccess && !(payload.success === true && Number.isFinite(code) && code >= 200 && code < 300)) {
+      throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
+    }
   }
   if (payload && typeof payload === 'object' && payload.success === false) {
     throw new UpstreamHTTPError(upstreamErrorMessage(path, res.status, payload), res.status, payload);
@@ -258,26 +262,39 @@ async function loginWithPassword(baseUrl, email, password) {
 }
 
 async function loginWithNewAPI(baseUrl, email, password) {
-  const login = await requestJson(baseUrl, '/user/login', {
-    method: 'POST',
-    body: { username: email, password },
-    prefix: '/api',
-    withMeta: true
-  });
-  const user = login.data || {};
-  if (!user.id) {
-    throw new Error('New API login succeeded but no user id was returned');
+  if (!email || !password) throw new Error('New API account/password is required for user data');
+  const attempts = [];
+  for (const path of ['/user/login', '/login']) {
+    for (const body of [{ username: email, password }, { email, password }]) {
+      try {
+        const login = await requestJson(baseUrl, path, {
+          method: 'POST',
+          body,
+          prefix: '/api',
+          withMeta: true,
+          timeoutMs: LOGIN_TIMEOUT_MS
+        });
+        const payload = login.data || {};
+        const candidates = [payload?.user, payload?.data?.user, payload?.data, payload];
+        const user = candidates.find((item) => item && typeof item === 'object' && (item.id ?? item.user_id)) || {};
+        const sessionToken = payload?.access_token || payload?.token || payload?.jwt || payload?.data?.access_token || '';
+        if (!user.id && !user.user_id && !sessionToken) throw new Error('New API login succeeded but no user id or session token was returned');
+        if (!login.cookie && !sessionToken) throw new Error('New API login succeeded but no session cookie was returned');
+        const userId = user.id ?? user.user_id ?? '';
+        return {
+          user,
+          cookie: login.cookie,
+          token: sessionToken,
+          headers: userId ? { 'New-Api-User': String(userId) } : {},
+          prefix: '/api',
+          login_path: path
+        };
+      } catch (err) {
+        attempts.push(`${path}(${Object.keys(body)[0]}): ${sanitizeUpstreamText(err.message, 180)}`);
+      }
+    }
   }
-  if (!login.cookie) {
-    throw new Error('New API login succeeded but no session cookie was returned');
-  }
-  return {
-    user,
-    cookie: login.cookie,
-    headers: { 'New-Api-User': String(user.id) },
-    prefix: '/api',
-    login_path: '/user/login'
-  };
+  throw new Error(sanitizeUpstreamText(`New API login failed: ${attempts.join('; ')}`, 720));
 }
 
 function extractBalance(profile) {
@@ -442,8 +459,12 @@ function normalizeRates(ratesPayload) {
 
 function normalizeNewAPIRates(groupsPayload, ratioConfigPayload = null) {
   const out = [];
-  const groups = groupsPayload && typeof groupsPayload === 'object' ? groupsPayload : {};
-  for (const [groupName, info] of Object.entries(groups)) {
+  const source = groupsPayload?.groups || groupsPayload?.data || groupsPayload;
+  const groups = Array.isArray(source) ? source : null;
+  const entries = groups
+    ? groups.map((info, index) => [String(info?.name || info?.group_name || info?.id || index), info])
+    : Object.entries(source && typeof source === 'object' ? source : {});
+  for (const [groupName, info] of entries) {
     const rate = pickFirstNumber(info?.ratio);
     if (rate !== null) {
       out.push({
@@ -460,7 +481,7 @@ function normalizeNewAPIRates(groupsPayload, ratioConfigPayload = null) {
   const ratioConfig = ratioConfigPayload && typeof ratioConfigPayload === 'object' ? ratioConfigPayload : {};
   const modelRatio = ratioConfig.model_ratio || ratioConfig.modelRatio || {};
   const groupRatio = ratioConfig.group_ratio || ratioConfig.groupRatio || {};
-  if (Object.keys(groups).length === 0 && groupRatio && typeof groupRatio === 'object') {
+  if (entries.length === 0 && groupRatio && typeof groupRatio === 'object') {
     for (const [groupName, value] of Object.entries(groupRatio)) {
       const rate = pickFirstNumber(value);
       if (rate !== null) {
@@ -480,10 +501,23 @@ function normalizeNewAPIRates(groupsPayload, ratioConfigPayload = null) {
 }
 
 function normalizeNewAPITokens(tokensPayload) {
-  if (Array.isArray(tokensPayload)) return tokensPayload;
-  if (Array.isArray(tokensPayload?.items)) return tokensPayload.items;
-  if (Array.isArray(tokensPayload?.data)) return tokensPayload.data;
-  return [];
+  return arrayFromMaybe(tokensPayload).map((item) => {
+    const rawStatus = item?.status;
+    const status = rawStatus === 1 || rawStatus === '1' || String(rawStatus).toLowerCase() === 'active'
+      ? 'active'
+      : rawStatus === 0 || rawStatus === '0' || String(rawStatus).toLowerCase() === 'inactive'
+        ? 'inactive'
+        : rawStatus == null ? '' : String(rawStatus);
+    return {
+      ...item,
+      status,
+      group: item?.group ?? item?.group_name ?? item?.group_id ?? '',
+      quota: item?.quota ?? item?.remain_quota ?? null,
+      quota_used: item?.quota_used ?? item?.used_quota ?? null,
+      expires_at: item?.expires_at ?? item?.expired_time ?? null,
+      last_used_at: item?.last_used_at ?? item?.accessed_time ?? null
+    };
+  });
 }
 
 function newAPIQuotaUnit(statusPayload) {
@@ -516,21 +550,53 @@ function buildNewAPIStatPath(days) {
 }
 
 function normalizeNewAPIUsage(self, totalStat, todayStat, weekStat, monthStat, quotaUnit) {
+  const tokenCount = (stats) => pickFirstNumber(
+    stats?.tokens,
+    stats?.total_tokens,
+    stats?.token_count,
+    toNumber(stats?.input_tokens) + toNumber(stats?.output_tokens) + toNumber(stats?.cache_creation_tokens) + toNumber(stats?.cache_read_tokens),
+    toNumber(stats?.total_input_tokens) + toNumber(stats?.total_output_tokens) + toNumber(stats?.total_cache_creation_tokens) + toNumber(stats?.total_cache_read_tokens)
+  );
+  const requestCount = (stats) => pickFirstNumber(stats?.requests, stats?.request_count, stats?.total_requests, stats?.count);
+  const quota = (stats) => convertNewAPIQuota(stats?.quota ?? stats?.actual_quota ?? stats?.cost ?? stats?.actual_cost, quotaUnit) || 0;
   return {
-    total_requests: toNumber(self?.request_count),
-    today_requests: 0,
-    total_tokens: 0,
-    today_tokens: 0,
-    total_cost: convertNewAPIQuota(self?.used_quota, quotaUnit) || 0,
-    today_cost: convertNewAPIQuota(todayStat?.quota, quotaUnit) || 0,
-    week_cost: convertNewAPIQuota(weekStat?.quota, quotaUnit) || 0,
-    month_cost: convertNewAPIQuota(monthStat?.quota, quotaUnit) || 0,
+    total_requests: requestCount(self) ?? requestCount(totalStat) ?? 0,
+    today_requests: requestCount(todayStat) ?? 0,
+    week_requests: requestCount(weekStat) ?? 0,
+    month_requests: requestCount(monthStat) ?? 0,
+    total_tokens: tokenCount(self) ?? tokenCount(totalStat) ?? 0,
+    today_tokens: tokenCount(todayStat) ?? 0,
+    week_tokens: tokenCount(weekStat) ?? 0,
+    month_tokens: tokenCount(monthStat) ?? 0,
+    total_cost: convertNewAPIQuota(self?.used_quota ?? totalStat?.quota, quotaUnit) || 0,
+    today_cost: quota(todayStat),
+    week_cost: quota(weekStat),
+    month_cost: quota(monthStat),
     stat_quota: totalStat?.quota ?? null,
     today_stat: todayStat || null,
     week_stat: weekStat || null,
     month_stat: monthStat || null,
     by_platform: []
   };
+}
+
+async function fetchNewAPITokens(baseUrl, auth, pageSize = 100) {
+  const items = [];
+  const seen = new Set();
+  for (let page = 0; page < 1000; page += 1) {
+    const payload = await requestJson(baseUrl, `/token/?p=${page}&page_size=${pageSize}`, { ...auth, withMeta: true });
+    const data = payload?.data ?? {};
+    const pageItems = normalizeNewAPITokens(data);
+    for (const item of pageItems) {
+      const key = item?.id ?? item?.key ?? item?.token_name ?? JSON.stringify(item);
+      if (seen.has(String(key))) continue;
+      seen.add(String(key));
+      items.push(item);
+    }
+    const total = pickFirstNumber(data?.total, data?.count, data?.total_count, payload?.payload?.total);
+    if (!pageItems.length || pageItems.length < pageSize || (total !== null && items.length >= total)) break;
+  }
+  return items;
 }
 
 function arrayFromMaybe(value) {
@@ -693,11 +759,18 @@ function normalizeNewAPIPricing(pricingPayload, ratioConfigPayload = null) {
 }
 
 async function fetchNewAPIState({ baseUrl, email, password, token }) {
-  if (token && (!email || !password)) {
-    throw new Error('New API user data requires account/password login because user endpoints require a session and New-Api-User header');
-  }
-  const login = await loginWithNewAPI(baseUrl, email, password);
-  const auth = { cookie: login.cookie, headers: login.headers, prefix: login.prefix };
+  const login = email && password
+    ? await loginWithNewAPI(baseUrl, email, password)
+    : {
+        user: {},
+        cookie: '',
+        token: token || '',
+        headers: {},
+        prefix: '/api',
+        login_path: 'token'
+      };
+  if (!login.cookie && !login.token) throw new Error('New API requires account/password or an API token');
+  const auth = { cookie: login.cookie, token: login.token, headers: login.headers, prefix: login.prefix };
   const results = {};
   const errors = {};
 
@@ -713,7 +786,12 @@ async function fetchNewAPIState({ baseUrl, email, password, token }) {
   await optional('profile', '/user/self');
   await optional('groups', '/user/self/groups');
   await optional('models', '/models');
-  await optional('keys', '/token/?p=0&page_size=100');
+  try {
+    results.keys = await fetchNewAPITokens(baseUrl, auth);
+  } catch (err) {
+    errors.keys = [{ path: '/token/', message: err.message, status: err.status || null }];
+    results.keys = null;
+  }
   await optional('totalStats', '/log/self/stat');
   await optional('todayStats', buildNewAPIStatPath(1));
   await optional('weekStats', buildNewAPIStatPath(7));
@@ -744,12 +822,12 @@ async function fetchNewAPIState({ baseUrl, email, password, token }) {
   };
 
   return {
-    token: token || null,
+    token: login.token || token || null,
     login: {
       provider: 'new-api',
       prefix: login.prefix,
       login_path: login.login_path,
-      user_id: login.user.id,
+      user_id: login.user.id ?? login.user.user_id ?? null,
       raw: login.user
     },
     profile,
@@ -775,11 +853,11 @@ async function fetchNewAPIState({ baseUrl, email, password, token }) {
       today_tokens: usage.today_tokens,
       total_cost: usage.total_cost,
       today_cost: usage.today_cost,
-      week_requests: 0,
-      week_tokens: 0,
+      week_requests: usage.week_requests,
+      week_tokens: usage.week_tokens,
       week_cost: usage.week_cost,
-      month_requests: 0,
-      month_tokens: 0,
+      month_requests: usage.month_requests,
+      month_tokens: usage.month_tokens,
       month_cost: usage.month_cost,
       codex_rate: null,
       openai_rate: platformRates.openai_rate,
@@ -1016,7 +1094,13 @@ async function getPaymentOrder({ baseUrl, email, password, token, orderId }) {
 module.exports = {
   UpstreamHTTPError,
   fetchSub2APIState,
+  fetchNewAPIState,
   normalizeRates,
+  normalizeNewAPIRates,
+  normalizeNewAPITokens,
+  normalizeNewAPIUsage,
+  fetchNewAPITokens,
+  loginWithNewAPI,
   loginWithPassword,
   refreshAccessToken,
   tokenExpiryIso,
