@@ -346,6 +346,9 @@ svg { display: block; }
 .upstream-table > thead th:nth-child(7) { width: 7%; }
 .upstream-table > thead th:nth-child(8) { width: 7%; }
 .upstream-table > thead th:nth-child(9) { width: 10%; }
+.upstream-table > thead th:last-child { width: 7%; position: sticky; right: 0; z-index: 4; background: var(--surface-subtle); }
+.upstream-table > tbody > tr.data-row > td:last-child { position: sticky; right: 0; z-index: 2; background: var(--surface); }
+.upstream-table > tbody > tr.data-row:hover > td:last-child { background: var(--surface-hover); }
 
 .upstream-name-cell { display: flex; align-items: center; gap: 12px; min-width: 210px; }
 .row-chevron { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; padding: 0; }
@@ -378,6 +381,14 @@ svg { display: block; }
 .icon-btn:hover { background: var(--surface-hover); }
 .icon-btn.bordered { border: 1px solid var(--border-strong); background: var(--surface); }
 .icon-btn svg { width: 19px; height: 19px; stroke-width: 1.9; }
+.row-action-menu { position: relative; display: inline-block; }
+.row-action-menu > summary { list-style: none; }
+.row-action-menu > summary::-webkit-details-marker { display: none; }
+.row-action-menu[open] > summary { background: var(--surface-hover); }
+.row-action-menu-panel { position: fixed; left: 8px; top: 8px; z-index: 60; min-width: 190px; max-height: min(300px, calc(100vh - 32px)); overflow-y: auto; padding: 5px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-dialog); }
+.menu-item { width: 100%; min-height: 36px; display: flex; align-items: center; gap: 9px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--text); text-align: left; white-space: nowrap; }
+.menu-item:hover { background: var(--surface-hover); }
+.menu-item svg { width: 17px; height: 17px; flex: 0 0 auto; }
 
 .btn { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; border: 1px solid transparent; border-radius: var(--radius); font-weight: 650; white-space: nowrap; }
 .btn svg { width: 17px; height: 17px; }
