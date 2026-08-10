@@ -6,6 +6,7 @@ const {
   extractBalance,
   extractDiscoveredBaseUrl,
   fetchNewAPIState,
+  newAPIQuotaDisplay,
   normalizeNewAPIRates,
   normalizeNewAPITokens,
   normalizeNewAPIUsage,
@@ -37,6 +38,35 @@ test('New API response codes and array-shaped groups normalize without losing us
   assert.equal(usage.month_cost, 0.6);
 });
 
+test('New API quota display follows the upstream currency configuration', () => {
+  assert.deepEqual(newAPIQuotaDisplay({
+    quota_per_unit: 500000,
+    quota_display_type: 'CNY',
+    usd_exchange_rate: 6.8
+  }), {
+    quotaUnit: 500000,
+    multiplier: 6.8,
+    currency: 'CNY'
+  });
+  assert.deepEqual(newAPIQuotaDisplay({
+    quotaPerUnit: 1000,
+    quotaDisplayType: 'CUSTOM',
+    customCurrencyExchangeRate: 2.5
+  }), {
+    quotaUnit: 1000,
+    multiplier: 2.5,
+    currency: 'CUSTOM'
+  });
+  assert.deepEqual(newAPIQuotaDisplay({
+    quota_per_unit: 2000,
+    quota_display_type: 'TOKENS'
+  }), {
+    quotaUnit: 2000,
+    multiplier: 2000,
+    currency: 'TOKENS'
+  });
+});
+
 test('New API state follows paginated token results and accepts code 200 login responses', async () => {
   const originalFetch = global.fetch;
   const calls = [];
@@ -65,7 +95,7 @@ test('New API state follows paginated token results and accepts code 200 login r
     } else if (path === '/api/log/self/stat') {
       body = { code: 0, data: { requests: 2, tokens: 5, quota: 100000 } };
     } else if (path === '/api/status') {
-      body = { code: 0, data: { quota_per_unit: 500000 } };
+      body = { code: 0, data: { quota_per_unit: 500000, quota_display_type: 'CNY', usd_exchange_rate: 6.8 } };
     } else if (path === '/api/pricing') {
       body = { code: 0, data: [] };
     } else if (path === '/api/ratio_config') {
@@ -89,7 +119,11 @@ test('New API state follows paginated token results and accepts code 200 login r
     assert.equal(state.snapshot.key_count, 101);
     assert.equal(state.snapshot.today_tokens, 5);
     assert.equal(state.snapshot.today_requests, 2);
-    assert.equal(state.snapshot.balance, 2);
+    assert.equal(state.snapshot.balance, 13.6);
+    assert.equal(state.snapshot.balance_currency, 'CNY');
+    assert.equal(state.snapshot.total_cost, 6.8);
+    assert.equal(state.snapshot.today_cost, 1.36);
+    assert.equal(state.snapshot.month_cost, 1.36);
     assert.equal(calls.filter((item) => item.path.startsWith('/api/token/')).length, 2);
     assert.equal(calls.find((item) => item.path === '/api/user/self').options.headers.cookie, 'session=fixture');
   } finally {

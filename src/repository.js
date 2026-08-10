@@ -941,20 +941,23 @@ function listRateChanges(limit = 100) {
 }
 
 function listModelPricing(siteId, limit = 300) {
-  const rows = db.prepare(`
-    SELECT *
-    FROM model_pricing_snapshots
-    WHERE upstream_site_id = ?
-    ORDER BY captured_at DESC, id DESC
-  `).all(siteId);
-  const seen = new Set();
-  const out = [];
-  for (const row of rows) {
-    if (seen.has(row.model_name)) continue;
-    seen.add(row.model_name);
-    out.push(row);
-    if (out.length >= limit) break;
-  }
+  const out = db.prepare(`
+    SELECT current.*
+    FROM model_pricing_snapshots current
+    WHERE current.upstream_site_id = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM model_pricing_snapshots newer
+        WHERE newer.upstream_site_id = current.upstream_site_id
+          AND newer.model_name = current.model_name
+          AND (
+            newer.captured_at > current.captured_at
+            OR (newer.captured_at = current.captured_at AND newer.id > current.id)
+          )
+      )
+    ORDER BY current.captured_at DESC, current.id DESC
+    LIMIT ?
+  `).all(siteId, limit);
   if (out.length > 0) return out;
 
   const site = getSite(siteId);
@@ -1008,18 +1011,20 @@ function listAllModelPricing(limit = 1000) {
     SELECT p.*, s.name AS upstream_name, s.base_url
     FROM model_pricing_snapshots p
     JOIN upstream_sites s ON s.id = p.upstream_site_id
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM model_pricing_snapshots newer
+      WHERE newer.upstream_site_id = p.upstream_site_id
+        AND newer.model_name = p.model_name
+        AND (
+          newer.captured_at > p.captured_at
+          OR (newer.captured_at = p.captured_at AND newer.id > p.id)
+        )
+    )
     ORDER BY p.captured_at DESC, p.id DESC
-  `).all();
-  const seen = new Set();
-  const out = [];
-  for (const row of rows) {
-    const key = `${row.upstream_site_id}:${row.model_name}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(row);
-    if (out.length >= limit) break;
-  }
-  return resolveOfficialPricingRows(out);
+    LIMIT ?
+  `).all(limit);
+  return resolveOfficialPricingRows(rows);
 }
 
 function listLatestRatesForBoard(limit = 1000) {

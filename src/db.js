@@ -189,6 +189,8 @@ CREATE TABLE IF NOT EXISTS model_pricing_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_model_pricing_snapshots_site_time ON model_pricing_snapshots(upstream_site_id, captured_at);
 CREATE INDEX IF NOT EXISTS idx_model_pricing_snapshots_model ON model_pricing_snapshots(model_name);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_snapshots_site_model_time
+  ON model_pricing_snapshots(upstream_site_id, model_name, captured_at, id);
 
 CREATE TABLE IF NOT EXISTS rate_change_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,6 +273,8 @@ CREATE TABLE IF NOT EXISTS upstream_api_key_secrets (
   PRIMARY KEY (upstream_site_id, upstream_key_id),
   FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_sync_logs_site_time ON sync_logs(upstream_site_id, started_at, id);
 
 CREATE TABLE IF NOT EXISTS upstream_key_create_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

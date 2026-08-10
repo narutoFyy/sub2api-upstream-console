@@ -17,6 +17,7 @@ const { pushPlusStatus, sendPushPlus, readPushPlusTargets, savePushPlusTargets, 
 const { syncUpstreamModels } = require('./modelDiscoveryService');
 const { updateManagedKey, deleteManagedKey } = require('./keyMutationService');
 const { queryUpstreamUsage, getUpstreamUsageDetail } = require('./upstreamUsage');
+const { buildUpstreamDetail } = require('./upstreamDetail');
 const { runtimeSettingsStatus, updateRuntimeSettings } = require('./runtimeSettings');
 const { startRuntimeScheduler, schedulerAllowed } = require('./runtimeScheduler');
 const { createUpdateService } = require('./updateService');
@@ -491,23 +492,22 @@ app.post('/api/upstreams/test', async (req, res, next) => {
 
 app.get('/api/upstreams/:id', (req, res) => {
   const id = Number(req.params.id);
-  const site = repo.getSite(id);
-  if (!site) return res.status(404).json({ error: 'Not found' });
-  const snapshot = withoutRawPayload(repo.getSnapshot(id));
-  if (snapshot) {
-    snapshot.pricing_summary = repo.getDetailPricingSummary(id);
+  const full = String(req.query.full || '') === '1';
+  const detail = buildUpstreamDetail(id, { repository: repo, full });
+  if (!detail) return res.status(404).json({ error: 'Not found' });
+
+  const payload = {
+    ...detail,
+    credentials: safeCredentials(detail.credentials),
+    snapshot: withoutRawPayload(detail.snapshot),
+    rates: detail.rates.map(withoutRawPayload)
+  };
+  if (full) {
+    payload.model_pricing = detail.model_pricing.map(withoutRawPayload);
+    payload.recharge_orders = detail.recharge_orders.map(withoutRawPayload);
+    payload.history = detail.history.map(withoutRawPayload);
   }
-  res.json({
-    site,
-    credentials: safeCredentials(repo.getMaskedCredentials(id)),
-    snapshot,
-    rates: repo.listRates(id, 300).map(withoutRawPayload),
-    model_pricing: repo.listModelPricing(id, 300).map(withoutRawPayload),
-    logs: repo.listSyncLogs(id, 100),
-    recharge_orders: repo.listRechargeOrders(id, 20).map(withoutRawPayload),
-    history: repo.listSnapshotHistory(id, 120).map(withoutRawPayload),
-    capabilities: repo.capabilityMatrix(id)
-  });
+  res.json(payload);
 });
 
 app.get('/api/upstreams/:id/trends', (req, res) => {

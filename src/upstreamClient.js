@@ -525,9 +525,34 @@ function newAPIQuotaUnit(statusPayload) {
   return unit && unit > 0 ? unit : 500000;
 }
 
-function convertNewAPIQuota(value, unit) {
+function newAPIQuotaDisplay(statusPayload = {}) {
+  const quotaUnit = newAPIQuotaUnit(statusPayload);
+  const type = String(statusPayload?.quota_display_type ?? statusPayload?.quotaDisplayType ?? '')
+    .trim()
+    .toUpperCase();
+  let multiplier = 1;
+  if (type === 'CNY') {
+    const rate = pickFirstNumber(statusPayload?.usd_exchange_rate, statusPayload?.usdExchangeRate);
+    multiplier = rate && rate > 0 ? rate : 1;
+  } else if (type === 'CUSTOM') {
+    const rate = pickFirstNumber(
+      statusPayload?.custom_currency_exchange_rate,
+      statusPayload?.customCurrencyExchangeRate
+    );
+    multiplier = rate && rate > 0 ? rate : 1;
+  } else if (type === 'TOKENS') {
+    multiplier = quotaUnit;
+  }
+  return {
+    quotaUnit,
+    multiplier,
+    currency: type || (statusPayload?.display_in_currency || statusPayload?.displayInCurrency ? 'USD' : 'quota')
+  };
+}
+
+function convertNewAPIQuota(value, unit, multiplier = 1) {
   const n = pickFirstNumber(value);
-  return n === null ? null : n / unit;
+  return n === null ? null : (n / unit) * multiplier;
 }
 
 function periodTimestampRange(days) {
@@ -549,7 +574,7 @@ function buildNewAPIStatPath(days) {
   return `/log/self/stat?start_timestamp=${range.start}&end_timestamp=${range.end}`;
 }
 
-function normalizeNewAPIUsage(self, totalStat, todayStat, weekStat, monthStat, quotaUnit) {
+function normalizeNewAPIUsage(self, totalStat, todayStat, weekStat, monthStat, quotaUnit, quotaMultiplier = 1) {
   const tokenCount = (stats) => pickFirstNumber(
     stats?.tokens,
     stats?.total_tokens,
@@ -558,7 +583,11 @@ function normalizeNewAPIUsage(self, totalStat, todayStat, weekStat, monthStat, q
     toNumber(stats?.total_input_tokens) + toNumber(stats?.total_output_tokens) + toNumber(stats?.total_cache_creation_tokens) + toNumber(stats?.total_cache_read_tokens)
   );
   const requestCount = (stats) => pickFirstNumber(stats?.requests, stats?.request_count, stats?.total_requests, stats?.count);
-  const quota = (stats) => convertNewAPIQuota(stats?.quota ?? stats?.actual_quota ?? stats?.cost ?? stats?.actual_cost, quotaUnit) || 0;
+  const quota = (stats) => convertNewAPIQuota(
+    stats?.quota ?? stats?.actual_quota ?? stats?.cost ?? stats?.actual_cost,
+    quotaUnit,
+    quotaMultiplier
+  ) || 0;
   return {
     total_requests: requestCount(self) ?? requestCount(totalStat) ?? 0,
     today_requests: requestCount(todayStat) ?? 0,
@@ -568,7 +597,7 @@ function normalizeNewAPIUsage(self, totalStat, todayStat, weekStat, monthStat, q
     today_tokens: tokenCount(todayStat) ?? 0,
     week_tokens: tokenCount(weekStat) ?? 0,
     month_tokens: tokenCount(monthStat) ?? 0,
-    total_cost: convertNewAPIQuota(self?.used_quota ?? totalStat?.quota, quotaUnit) || 0,
+    total_cost: convertNewAPIQuota(self?.used_quota ?? totalStat?.quota, quotaUnit, quotaMultiplier) || 0,
     today_cost: quota(todayStat),
     week_cost: quota(weekStat),
     month_cost: quota(monthStat),
@@ -631,7 +660,7 @@ function isActiveNewAPISubscription(item, nowSeconds) {
   return true;
 }
 
-function normalizeNewAPISubscription(subscriptionPayload, plansPayload, quotaUnit) {
+function normalizeNewAPISubscription(subscriptionPayload, plansPayload, quotaUnit, quotaMultiplier = 1) {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const activeItems = uniqueSubscriptions(arrayFromMaybe(subscriptionPayload?.subscriptions));
   const explicitAllItems = uniqueSubscriptions(arrayFromMaybe(subscriptionPayload?.all_subscriptions));
@@ -648,8 +677,8 @@ function normalizeNewAPISubscription(subscriptionPayload, plansPayload, quotaUni
   const subscriptions = normalizedActiveItems.map((item) => {
     const sub = item?.subscription || item || {};
     const plan = planMap.get(Number(sub.plan_id)) || {};
-    const total = convertNewAPIQuota(sub.amount_total, quotaUnit);
-    const used = convertNewAPIQuota(sub.amount_used, quotaUnit);
+    const total = convertNewAPIQuota(sub.amount_total, quotaUnit, quotaMultiplier);
+    const used = convertNewAPIQuota(sub.amount_used, quotaUnit, quotaMultiplier);
     const remaining = total === null || used === null ? null : Math.max(total - used, 0);
     const usagePercent = total && used !== null ? Math.min(Math.max((used / total) * 100, 0), 100) : null;
     const daysRemaining = sub.end_time ? Math.max(Math.ceil((Number(sub.end_time) - nowSeconds) / 86400), 0) : null;
@@ -803,13 +832,27 @@ async function fetchNewAPIState({ baseUrl, email, password, token }) {
   await optional('ratioConfig', '/ratio_config', { cookie: '', headers: {} });
 
   const profile = results.profile || login.user || {};
-  const quotaUnit = newAPIQuotaUnit(results.status || {});
+  const quotaDisplay = newAPIQuotaDisplay(results.status || {});
+  const quotaUnit = quotaDisplay.quotaUnit;
   const rates = normalizeNewAPIRates(results.groups, results.ratioConfig);
   const platformRates = summarizePlatformRates(rates);
   const allRateValues = rates.map((item) => item.rate).filter(Number.isFinite);
   const keyItems = normalizeNewAPITokens(results.keys);
-  const usage = normalizeNewAPIUsage(profile, results.totalStats, results.todayStats, results.weekStats, results.monthStats, quotaUnit);
-  const subscription = normalizeNewAPISubscription(results.subscriptionSelf, results.subscriptionPlans, quotaUnit);
+  const usage = normalizeNewAPIUsage(
+    profile,
+    results.totalStats,
+    results.todayStats,
+    results.weekStats,
+    results.monthStats,
+    quotaUnit,
+    quotaDisplay.multiplier
+  );
+  const subscription = normalizeNewAPISubscription(
+    results.subscriptionSelf,
+    results.subscriptionPlans,
+    quotaUnit,
+    quotaDisplay.multiplier
+  );
   const pricing = normalizeNewAPIPricing(results.pricing, results.ratioConfig);
   const payment = {
     enabled: false,
@@ -842,8 +885,8 @@ async function fetchNewAPIState({ baseUrl, email, password, token }) {
     model_pricing: pricing.items,
     errors,
     snapshot: {
-      balance: convertNewAPIQuota(profile?.quota, quotaUnit),
-      balance_currency: results.status?.quota_display_type || results.status?.display_in_currency || 'quota',
+      balance: convertNewAPIQuota(profile?.quota, quotaUnit, quotaDisplay.multiplier),
+      balance_currency: quotaDisplay.currency,
       username: profile?.username || profile?.display_name || '',
       email: profile?.email || email || '',
       role: String(profile?.role ?? ''),
@@ -1099,6 +1142,7 @@ module.exports = {
   normalizeNewAPIRates,
   normalizeNewAPITokens,
   normalizeNewAPIUsage,
+  newAPIQuotaDisplay,
   fetchNewAPITokens,
   loginWithNewAPI,
   loginWithPassword,

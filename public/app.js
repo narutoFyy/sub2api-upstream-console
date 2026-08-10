@@ -413,23 +413,7 @@ function filteredMonitoringSites() {
 
 function renderUpstreamActions(site) {
   const name = escapeHtml(site.name);
-  return `<details class="row-action-menu" data-upstream-action-menu><summary class="icon-btn" title="更多操作" aria-label="${name} 更多操作"><i data-lucide="ellipsis-vertical"></i></summary><div class="row-action-menu-panel"><button class="menu-item" type="button" data-sync-site="${site.id}"><i data-lucide="refresh-cw"></i><span>同步余额和 Key</span></button><button class="menu-item" type="button" data-sync-site-models="${site.id}"><i data-lucide="boxes"></i><span>同步支持模型</span></button><button class="menu-item" type="button" data-detail-site="${site.id}"><i data-lucide="panel-right-open"></i><span>查看详情</span></button><button class="menu-item danger-text" type="button" data-delete-upstream="${site.id}" data-upstream-name="${name}"><i data-lucide="trash-2"></i><span>永久删除</span></button></div></details>`;
-}
-
-function positionUpstreamActionMenu(menu) {
-  if (!menu?.open) return;
-  const summary = menu.querySelector('summary');
-  const panel = menu.querySelector('.row-action-menu-panel');
-  if (!summary || !panel) return;
-  const anchor = summary.getBoundingClientRect();
-  const width = panel.offsetWidth;
-  const height = panel.offsetHeight;
-  const left = Math.min(Math.max(8, anchor.right - width), window.innerWidth - width - 8);
-  const above = anchor.top - height - 6;
-  const below = anchor.bottom + 6;
-  const top = above >= 8 ? above : Math.min(below, window.innerHeight - height - 8);
-  panel.style.left = `${left}px`;
-  panel.style.top = `${Math.max(8, top)}px`;
+  return `<div class="row-actions upstream-row-actions"><button class="icon-btn" type="button" data-sync-site="${site.id}" title="同步余额和 Key" aria-label="${name} 同步余额和 Key"><i data-lucide="refresh-cw"></i></button><button class="icon-btn" type="button" data-sync-site-models="${site.id}" title="同步支持模型" aria-label="${name} 同步支持模型"><i data-lucide="boxes"></i></button><button class="icon-btn" type="button" data-detail-site="${site.id}" title="查看详情" aria-label="查看 ${name} 详情"><i data-lucide="panel-right-open"></i></button><button class="icon-btn danger-text" type="button" data-delete-upstream="${site.id}" data-upstream-name="${name}" title="永久删除" aria-label="永久删除 ${name}"><i data-lucide="trash-2"></i></button></div>`;
 }
 
 function renderMonitoring() {
@@ -1409,11 +1393,6 @@ document.querySelector('#importFileInput').addEventListener('change', async (eve
 });
 
 document.addEventListener('click', async (event) => {
-  document.querySelectorAll('[data-upstream-action-menu][open]').forEach((menu) => {
-    if (!menu.contains(event.target)) menu.removeAttribute('open');
-  });
-  const summary = event.target.closest('[data-upstream-action-menu] > summary');
-  if (summary) return setTimeout(() => positionUpstreamActionMenu(summary.parentElement), 0);
   const target = event.target.closest('button');
   if (!target) return;
   if (target.dataset.closeDialog) return closeDialog(target.dataset.closeDialog);
@@ -1530,9 +1509,6 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.action === 'backup-database') { window.location.href = '/api/backup/database'; return; }
   if (target.dataset.action === 'logout') { await api('/api/logout', { method: 'POST' }); return showLogin(); }
 });
-
-window.addEventListener('resize', () => document.querySelectorAll('[data-upstream-action-menu][open]').forEach(positionUpstreamActionMenu));
-window.addEventListener('scroll', () => document.querySelectorAll('[data-upstream-action-menu][open]').forEach(positionUpstreamActionMenu), true);
 
 async function boot() {
   const theme = localStorage.getItem('upstream-control-theme');
