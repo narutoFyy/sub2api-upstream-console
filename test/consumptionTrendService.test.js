@@ -54,6 +54,22 @@ test('balance decline is an explicit estimate when cumulative cost is unavailabl
   assert.equal(result.average_per_hour, 1.25);
 });
 
+test('recharges are reported separately and buckets record whether a snapshot landed', () => {
+  const result = summarizeConsumption([
+    sample(5, 20, 0),
+    sample(4, 18, 0),
+    sample(3, 50, 0),
+    sample(1, 47, 0)
+  ], { balance: 47 }, '24h', NOW);
+
+  assert.equal(result.consumption, 5);
+  assert.equal(result.recharge, 32);
+  assert.deepEqual(result.buckets.filter((bucket) => bucket.recharge > 0).map((bucket) => bucket.recharge), [32]);
+  assert.equal(result.buckets.filter((bucket) => bucket.observed).length, 4);
+  assert.equal(result.buckets.at(0).observed, false);
+  assert.ok(result.buckets.every((bucket) => !Object.hasOwn(bucket, 'sample_count')));
+});
+
 test('speed and runway are withheld for sparse coverage', () => {
   const result = summarizeConsumption([
     sample(0.5, 10, 1),

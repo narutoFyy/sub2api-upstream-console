@@ -45,14 +45,18 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
     ended_at: new Date(Math.min(nowMs, sinceMs + (index + 1) * definition.bucket_ms)).toISOString(),
     cost_consumption: 0,
     balance_consumption: 0,
+    recharge: 0,
+    sample_count: 0,
     balance: null
   }));
 
   let costConsumption = 0;
   let balanceConsumption = 0;
+  let recharge = 0;
   for (let index = 0; index < normalized.length; index += 1) {
     const current = normalized[index];
     const target = buckets[bucketIndex(current.timestamp_ms, sinceMs, definition.bucket_ms, bucketCount)];
+    target.sample_count += 1;
     if (current.balance !== null) target.balance = current.balance;
     if (index === 0) continue;
     const previous = normalized[index - 1];
@@ -68,6 +72,9 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
       if (delta > 0) {
         balanceConsumption += delta;
         target.balance_consumption += delta;
+      } else if (delta < 0) {
+        recharge += -delta;
+        target.recharge += -delta;
       }
     }
   }
@@ -76,6 +83,8 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
   for (const bucket of buckets) {
     if (bucket.balance !== null) carriedBalance = bucket.balance;
     else bucket.balance = carriedBalance;
+    bucket.observed = bucket.sample_count > 0;
+    delete bucket.sample_count;
   }
 
   const source = costConsumption > 0 || balanceConsumption === 0 ? 'actual_cost' : 'balance_estimate';
@@ -109,6 +118,7 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
     source,
     estimated: source === 'balance_estimate',
     current_balance: currentBalance,
+    recharge,
     consumption,
     average_per_hour: averagePerHour,
     average_per_day: averagePerHour === null ? null : averagePerHour * 24,

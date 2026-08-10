@@ -264,23 +264,53 @@ svg { display: block; }
 .consumption-track { height: 8px; border-radius: 3px; background: var(--surface-subtle); overflow: hidden; }
 .consumption-track i { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
 .consumption-detail-head .muted { display: block; margin-top: 4px; }
-.consumption-detail-balance { text-align: right; }
-.consumption-detail-balance span { display: block; color: var(--text-muted); font-size: 11px; }
-.consumption-detail-balance strong { display: block; margin-top: 3px; font-size: 22px; font-variant-numeric: tabular-nums; }
-.consumption-chart-stack { min-width: 0; }
-.chart-section-label { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--text-secondary); font-size: 12px; font-weight: 680; }
-.chart-section-label + .consumption-chart { margin-top: 5px; }
-.chart-section-label small { color: var(--text-muted); font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.consumption-chart { width: 100%; height: auto; min-height: 112px; }
-.consumption-bars-chart { min-height: 106px; }
+.chart-table-toggle { flex: none; padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.chart-table-toggle:hover { border-color: var(--primary); color: var(--primary); }
+.consumption-stat-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.consumption-stat span { display: block; color: var(--text-muted); font-size: 11px; }
+.consumption-stat strong { display: block; margin-top: 3px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.consumption-stat.hero strong { font-size: 26px; font-variant-numeric: normal; letter-spacing: -.01em; }
+.consumption-stat strong.warning { color: var(--warning); }
+.consumption-stat strong.danger { color: var(--danger); }
+.consumption-chart-wrap { min-width: 0; --series-balance: #2a78d6; --series-consumption: #eb6834; }
+:root[data-theme="dark"] .consumption-chart-wrap { --series-balance: #3987e5; --series-consumption: #d95926; }
+.chart-legend-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 8px; color: var(--text-secondary); font-size: 12px; }
+.chart-key { display: inline-flex; align-items: center; gap: 6px; }
+.chart-key i { display: block; }
+.balance-key i { width: 12px; height: 2px; border-radius: 1px; background: var(--series-balance); }
+.consumption-key i { width: 9px; height: 9px; border-radius: 2px; background: var(--series-consumption); }
+.recharge-key i { width: 2px; height: 11px; background: var(--healthy); }
+.chart-peak { margin-left: auto; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.chart-plot { position: relative; }
+.consumption-chart { display: block; width: 100%; height: auto; }
 .chart-gridline { stroke: var(--border); stroke-width: 1; }
-.consumption-bar { fill: var(--warning); opacity: .78; }
-.balance-line { fill: none; stroke: var(--primary); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.consumption-bar { fill: var(--series-consumption); }
+.balance-line { fill: none; stroke: var(--series-balance); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.balance-point, .balance-end-dot { fill: var(--series-balance); }
+.balance-end-ring { fill: var(--surface); }
+.recharge-mark { stroke: var(--healthy); stroke-width: 1; opacity: .55; vector-effect: non-scaling-stroke; }
 .chart-axis-label { fill: var(--text-muted); font-size: 11px; }
-.chart-time-label.label-1 { text-anchor: middle; }
-.chart-time-label.label-2 { text-anchor: end; }
-.chart-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; color: var(--text-secondary); font-size: 12px; }
-.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-y-label { text-anchor: end; }
+.chart-time-label { text-anchor: middle; }
+.chart-hit { fill: transparent; outline: none; }
+.chart-hit:hover, .chart-hit.active { fill: var(--text); fill-opacity: .05; }
+.chart-hit:focus-visible { stroke: var(--primary); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart-tooltip { position: absolute; top: 8px; transform: translateX(-50%); min-width: 116px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-dialog); pointer-events: none; }
+.chart-tooltip-time { margin-bottom: 5px; color: var(--text-muted); font-size: 11px; }
+.chart-tooltip-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.chart-tooltip-row + .chart-tooltip-row { margin-top: 2px; }
+.chart-tooltip-row strong { order: 2; font-size: 13px; font-variant-numeric: tabular-nums; }
+.chart-tooltip-row span { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 12px; }
+.chart-tooltip-row span::before { content: ''; width: 8px; height: 8px; border-radius: 2px; background: var(--text-muted); }
+.chart-tooltip-row.balance span::before { width: 10px; height: 2px; border-radius: 1px; background: var(--series-balance); }
+.chart-tooltip-row.consumption span::before { background: var(--series-consumption); }
+.chart-tooltip-row.recharge span::before { width: 2px; height: 10px; border-radius: 0; background: var(--healthy); }
+.chart-table-wrap { max-height: 258px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.chart-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.chart-table th, .chart-table td { padding: 6px 10px; text-align: right; font-variant-numeric: tabular-nums; }
+.chart-table thead th { position: sticky; top: 0; background: var(--surface-subtle); color: var(--text-secondary); font-weight: 600; }
+.chart-table tbody th { text-align: left; font-weight: 600; }
+.chart-table tbody tr + tr th, .chart-table tbody tr + tr td { border-top: 1px solid var(--border); }
 .legend-line { width: 16px; height: 3px; background: var(--primary); }
 .legend-bar { width: 11px; height: 8px; background: var(--warning); opacity: .65; }
 .compact-empty { min-height: 170px; }
@@ -588,6 +618,7 @@ dialog::backdrop { background: rgba(13, 18, 24, 0.44); backdrop-filter: blur(2px
   .compact-segments { width: 100%; }
   .compact-segments button { flex: 1; padding-left: 8px; padding-right: 8px; }
   .consumption-rank-row { grid-template-columns: minmax(86px, 110px) minmax(60px, 1fr) auto; }
+  .consumption-stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter-actions select, .filter-actions .btn { flex: 1; width: auto; }
   .inline-filters { width: 100%; flex-direction: column; }
   .inline-filters select { width: 100%; }

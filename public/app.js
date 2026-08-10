@@ -13,7 +13,7 @@ const VIEW_META = {
 const state = {
   activeView: localStorage.getItem('upstream-control-view') || 'monitoring',
   monitoring: { totals: {}, items: [], pushplus: { configured: false }, open_alerts: 0 },
-  consumption: { period: '24h', items: [], total_consumption: 0, selectedSiteId: null, loading: false, error: '' },
+  consumption: { period: '24h', items: [], total_consumption: 0, selectedSiteId: null, loading: false, error: '', showTable: false },
   alerts: [],
   logs: [],
   rateChanges: [],
@@ -242,52 +242,155 @@ function chartTimeLabel(value, period) {
     : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
 }
 
+function axisMoneyText(value, step) {
+  const number = finiteNumberOrNull(value);
+  if (number === null) return '';
+  const stepSize = finiteNumberOrNull(step);
+  let digits;
+  if (stepSize !== null && stepSize > 0) {
+    digits = Math.min(4, Math.max(0, -Math.floor(Math.log10(stepSize) + 1e-9)));
+    if (!Number.isInteger(stepSize) && digits === 0) digits = 1;
+  } else {
+    const absolute = Math.abs(number);
+    digits = absolute >= 1000 ? 0 : absolute >= 10 ? 0 : absolute >= 1 ? 1 : 2;
+  }
+  const rounded = Number(number.toFixed(digits));
+  return `$${rounded.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+}
+
+function ticksForStep(min, max, step) {
+  const ticks = [];
+  const start = Math.ceil(min / step) * step;
+  for (let value = start; value <= max + step * 1e-9; value += step) ticks.push(Number(value.toPrecision(12)));
+  return ticks;
+}
+
+function niceAxisTicks(min, max, count = 4) {
+  const span = max - min;
+  if (!(span > 0)) return [max];
+  const magnitude = 10 ** Math.floor(Math.log10(span));
+  const steps = [];
+  for (const scale of [magnitude / 100, magnitude / 10, magnitude, magnitude * 10]) {
+    for (const factor of [1, 2, 2.5, 5]) steps.push(factor * scale);
+  }
+  steps.sort((left, right) => left - right);
+  const fallback = [];
+  for (const step of steps) {
+    if (!(step > 0)) continue;
+    const ticks = ticksForStep(min, max, step);
+    if (ticks.length > count + 1) continue;
+    if (ticks.length >= 3) return ticks;
+    if (ticks.length > fallback.length) fallback.splice(0, fallback.length, ...ticks);
+  }
+  return fallback.length ? fallback : [max];
+}
+
+function balanceSegments(buckets) {
+  const segments = [];
+  let current = [];
+  buckets.forEach((bucket, index) => {
+    const balance = finiteNumberOrNull(bucket.balance);
+    if (balance === null || bucket.observed === false) {
+      if (current.length) segments.push(current);
+      current = [];
+      if (balance !== null) current.push({ index, balance, carried: true });
+      return;
+    }
+    current.push({ index, balance, carried: false });
+  });
+  if (current.length) segments.push(current);
+  return segments.filter((segment) => segment.some((point) => !point.carried));
+}
+
 function consumptionChartMarkup(item) {
   const buckets = item?.buckets || [];
   if (!buckets.length || !item.sample_count) return '<div class="empty-state compact-empty">该周期还没有趋势数据</div>';
-  const width = 640;
-  const left = 42;
-  const right = 12;
-  const balanceTop = 16;
-  const balanceBottom = 104;
-  const consumptionTop = 10;
-  const consumptionBottom = 92;
+  const width = 660;
+  const height = 250;
+  const left = 54;
+  const right = 16;
+  const top = 18;
+  const axisBand = 26;
+  const plotBottom = height - axisBand;
   const plotWidth = width - left - right;
+  const plotHeight = plotBottom - top;
+  const barZone = plotHeight * 0.34;
+  const lineBottom = plotBottom - barZone - 10;
   const step = plotWidth / buckets.length;
+  const centerOf = (index) => left + index * step + step / 2;
   const consumptionMax = Math.max(0, ...buckets.map((bucket) => Number(bucket.consumption || 0)));
-  const balances = buckets.map((bucket) => finiteNumberOrNull(bucket.balance)).filter((value) => value !== null);
-  const balanceMin = balances.length ? Math.min(...balances) : 0;
-  const balanceMax = balances.length ? Math.max(...balances) : 0;
-  const balanceRange = Math.max(balanceMax - balanceMin, Math.abs(balanceMax || 1) * 0.02, 0.01);
+  const balances = buckets.filter((bucket) => bucket.observed !== false).map((bucket) => finiteNumberOrNull(bucket.balance)).filter((value) => value !== null);
+  const rawMin = balances.length ? Math.min(...balances) : 0;
+  const rawMax = balances.length ? Math.max(...balances) : 0;
+  const padding = Math.max((rawMax - rawMin) * 0.12, Math.abs(rawMax || 1) * 0.015, 0.01);
+  const balanceMin = rawMin - padding;
+  const balanceMax = rawMax + padding;
+  const balanceRange = balanceMax - balanceMin;
+  const yOf = (balance) => top + ((balanceMax - balance) / balanceRange) * (lineBottom - top);
+  const ticks = niceAxisTicks(balanceMin, balanceMax).filter((tick) => tick >= rawMin - padding && tick <= rawMax + padding);
+  const tickStep = ticks.length > 1 ? Math.abs(ticks[1] - ticks[0]) : null;
+  const grid = ticks.map((tick) => `<line class="chart-gridline" x1="${left}" y1="${yOf(tick).toFixed(2)}" x2="${width - right}" y2="${yOf(tick).toFixed(2)}"></line><text class="chart-axis-label chart-y-label" x="${left - 8}" y="${(yOf(tick) + 3.5).toFixed(2)}">${escapeHtml(axisMoneyText(tick, tickStep))}</text>`).join('');
+  const barWidth = Math.min(24, Math.max(2, step - 2));
   const bars = buckets.map((bucket, index) => {
-    const height = consumptionMax > 0 ? Number(bucket.consumption || 0) / consumptionMax * (consumptionBottom - consumptionTop) : 0;
-    return `<rect class="consumption-bar" x="${(left + index * step + step * 0.2).toFixed(2)}" y="${(consumptionBottom - height).toFixed(2)}" width="${Math.max(2, step * 0.6).toFixed(2)}" height="${height.toFixed(2)}"><title>${escapeHtml(chartTimeLabel(bucket.started_at, item.period))} · $${numberText(bucket.consumption, '0')}</title></rect>`;
+    const value = Number(bucket.consumption || 0);
+    const barHeight = consumptionMax > 0 ? value / consumptionMax * barZone : 0;
+    if (!(barHeight > 0)) return '';
+    const radius = Math.min(4, barWidth / 2, barHeight);
+    const x = centerOf(index) - barWidth / 2;
+    const y = plotBottom - barHeight;
+    return `<path class="consumption-bar" d="M${x.toFixed(2)} ${plotBottom} L${x.toFixed(2)} ${(y + radius).toFixed(2)} Q${x.toFixed(2)} ${y.toFixed(2)} ${(x + radius).toFixed(2)} ${y.toFixed(2)} L${(x + barWidth - radius).toFixed(2)} ${y.toFixed(2)} Q${(x + barWidth).toFixed(2)} ${y.toFixed(2)} ${(x + barWidth).toFixed(2)} ${(y + radius).toFixed(2)} L${(x + barWidth).toFixed(2)} ${plotBottom} Z"></path>`;
   }).join('');
-  const points = buckets.map((bucket, index) => {
-    const balance = finiteNumberOrNull(bucket.balance);
-    if (balance === null) return null;
-    const x = left + index * step + step / 2;
-    const y = balanceTop + ((balanceMax - balance) / balanceRange) * (balanceBottom - balanceTop);
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  }).filter(Boolean).join(' ');
-  const labels = [buckets[0], buckets[Math.floor((buckets.length - 1) / 2)], buckets.at(-1)];
-  const balanceLabel = balances.length ? `$${numberText(balanceMax)} / $${numberText(balanceMin)}` : '暂无余额';
-  const consumptionLabel = `$${numberText(consumptionMax, '0')} 峰值`;
-  return `<div class="consumption-chart-stack" role="img" aria-label="${escapeHtml(item.name)}余额趋势和每${item.period === '24h' ? '小时' : '时段'}消耗">
-    <div class="chart-section-label"><span>余额趋势</span><small>${escapeHtml(balanceLabel)}</small></div>
-    <svg class="consumption-chart balance-chart" viewBox="0 0 ${width} 122" aria-hidden="true">
-      <line class="chart-gridline" x1="${left}" y1="${balanceTop}" x2="${width - right}" y2="${balanceTop}"></line>
-      <line class="chart-gridline" x1="${left}" y1="${balanceBottom}" x2="${width - right}" y2="${balanceBottom}"></line>
-      <polyline class="balance-line" points="${points}"></polyline>
-    </svg>
-    <div class="chart-section-label"><span>分时消耗</span><small>${escapeHtml(consumptionLabel)}</small></div>
-    <svg class="consumption-chart consumption-bars-chart" viewBox="0 0 ${width} 116" aria-hidden="true">
-      <line class="chart-gridline" x1="${left}" y1="${consumptionTop}" x2="${width - right}" y2="${consumptionTop}"></line>
-      <line class="chart-gridline" x1="${left}" y1="${consumptionBottom}" x2="${width - right}" y2="${consumptionBottom}"></line>
-      ${bars}
-      ${labels.map((bucket, index) => `<text class="chart-axis-label chart-time-label label-${index}" x="${index === 0 ? left : index === 1 ? width / 2 : width - right}" y="110">${escapeHtml(chartTimeLabel(bucket.started_at, item.period))}</text>`).join('')}
-    </svg>
+  const segments = balanceSegments(buckets);
+  const lines = segments.map((segment) => {
+    const points = segment.map((point) => `${centerOf(point.index).toFixed(2)},${yOf(point.balance).toFixed(2)}`).join(' ');
+    return segment.length === 1
+      ? `<circle class="balance-point" cx="${centerOf(segment[0].index).toFixed(2)}" cy="${yOf(segment[0].balance).toFixed(2)}" r="3"></circle>`
+      : `<polyline class="balance-line" points="${points}"></polyline>`;
+  }).join('');
+  const lastSegment = segments.at(-1);
+  const lastPoint = lastSegment?.at(-1);
+  const endMarker = lastPoint ? `<circle class="balance-end-ring" cx="${centerOf(lastPoint.index).toFixed(2)}" cy="${yOf(lastPoint.balance).toFixed(2)}" r="6"></circle><circle class="balance-end-dot" cx="${centerOf(lastPoint.index).toFixed(2)}" cy="${yOf(lastPoint.balance).toFixed(2)}" r="4"></circle>` : '';
+  const rechargeMarks = buckets.map((bucket, index) => Number(bucket.recharge || 0) > 0
+    ? `<line class="recharge-mark" x1="${centerOf(index).toFixed(2)}" y1="${top}" x2="${centerOf(index).toFixed(2)}" y2="${plotBottom}"></line>`
+    : '').join('');
+  const tickCount = Math.min(4, buckets.length);
+  const timeTicks = Array.from({ length: tickCount }, (_, index) => Math.round(index * (buckets.length - 1) / Math.max(1, tickCount - 1)));
+  const timeLabels = [...new Set(timeTicks)].map((index) => `<text class="chart-axis-label chart-time-label" x="${centerOf(index).toFixed(2)}" y="${plotBottom + 18}">${escapeHtml(chartTimeLabel(buckets[index].started_at, item.period))}</text>`).join('');
+  const hitAreas = buckets.map((bucket, index) => `<rect class="chart-hit" x="${(left + index * step).toFixed(2)}" y="${top}" width="${step.toFixed(2)}" height="${(plotBottom - top).toFixed(2)}" data-bucket-index="${index}" tabindex="0" role="button" aria-label="${escapeHtml(bucketReadout(bucket, item).aria)}"></rect>`).join('');
+  const bucketUnit = item.period === '24h' ? '每小时' : item.period === '7d' ? '每 6 小时' : '每天';
+  return `<div class="consumption-chart-wrap" data-chart-site="${item.id}">
+    <div class="chart-legend-row">
+      <span class="chart-key balance-key"><i></i>余额</span>
+      <span class="chart-key consumption-key"><i></i>${escapeHtml(bucketUnit)}消耗</span>
+      ${Number(item.recharge || 0) > 0 ? '<span class="chart-key recharge-key"><i></i>充值</span>' : ''}
+      <span class="chart-peak">峰值 ${escapeHtml(axisMoneyText(consumptionMax))}</span>
+    </div>
+    <div class="chart-plot">
+      <svg class="consumption-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(item.name)} 余额趋势与${bucketUnit}消耗">
+        ${grid}
+        ${rechargeMarks}
+        ${bars}
+        ${lines}
+        ${endMarker}
+        ${timeLabels}
+        ${hitAreas}
+      </svg>
+      <div class="chart-tooltip" hidden></div>
+    </div>
   </div>`;
+}
+
+function bucketReadout(bucket, item) {
+  const time = chartTimeLabel(bucket.started_at, item.period);
+  const balance = finiteNumberOrNull(bucket.balance);
+  const consumption = Number(bucket.consumption || 0);
+  const recharge = Number(bucket.recharge || 0);
+  const rows = [
+    { label: '消耗', value: `$${numberText(consumption, '0')}`, key: 'consumption' },
+    { label: '余额', value: bucket.observed === false || balance === null ? '无快照' : `$${numberText(balance)}`, key: 'balance' }
+  ];
+  if (recharge > 0) rows.push({ label: '充值', value: `$${numberText(recharge)}`, key: 'recharge' });
+  return { time, rows, aria: `${time} 消耗 ${rows[0].value}，余额 ${rows[1].value}${recharge > 0 ? `，充值 $${numberText(recharge)}` : ''}` };
 }
 
 function filteredConsumptionItems() {
@@ -326,7 +429,82 @@ function renderConsumptionDashboard() {
     <span class="consumption-rank-name">${escapeHtml(item.name)}</span><span class="consumption-track"><i style="width:${max > 0 ? Math.max(3, Number(item.consumption || 0) / max * 100) : 0}%"></i></span><strong>${escapeHtml(consumptionAmountText(item))}</strong><small>${escapeHtml(consumptionSpeedText(item))}</small>
   </button>`).join('');
   const selected = visible.find((item) => Number(item.id) === Number(state.consumption.selectedSiteId)) || visible[0];
-  detail.innerHTML = `<div class="consumption-detail-head"><div><h3>${escapeHtml(selected.name)}</h3><span class="muted">${escapeHtml(consumptionCoverageText(selected))}${selected.estimated ? ' · 余额估算' : ' · 实际成本'}</span></div><div class="consumption-detail-balance"><span>当前余额</span><strong>${selected.current_balance == null ? '-' : `$${numberText(selected.current_balance)}`}</strong></div></div>${consumptionChartMarkup(selected)}<div class="chart-legend"><span>预计可用 ${escapeHtml(runwayText(selected))}</span><span>数据按同步快照计算</span></div>`;
+  const stats = [
+    { label: '当前余额', value: selected.current_balance == null ? '-' : `$${numberText(selected.current_balance)}`, hero: true },
+    { label: '周期消耗', value: consumptionAmountText(selected) },
+    { label: '消耗速度', value: consumptionSpeedText(selected) },
+    { label: '预计可用', value: runwayText(selected), tone: runwayTone(selected) }
+  ];
+  detail.innerHTML = `<div class="consumption-detail-head">
+      <div><h3>${escapeHtml(selected.name)}</h3><span class="muted">${escapeHtml(consumptionCoverageText(selected))} · ${selected.estimated ? '余额估算' : '实际成本'}${Number(selected.recharge || 0) > 0 ? ` · 期间充值 $${numberText(selected.recharge)}` : ''}</span></div>
+      <button class="chart-table-toggle" type="button" data-consumption-table="${selected.id}">${state.consumption.showTable ? '看图表' : '看数据'}</button>
+    </div>
+    <div class="consumption-stat-row">${stats.map((stat) => `<div class="consumption-stat${stat.hero ? ' hero' : ''}"><span>${escapeHtml(stat.label)}</span><strong class="${stat.tone || ''}">${escapeHtml(stat.value)}</strong></div>`).join('')}</div>
+    ${state.consumption.showTable ? consumptionTableMarkup(selected) : consumptionChartMarkup(selected)}`;
+  bindConsumptionChart(detail);
+}
+
+function runwayTone(item) {
+  const hours = finiteNumberOrNull(item?.runway_hours);
+  if (!item?.enough_data || hours === null) return '';
+  if (hours < 12) return 'danger';
+  if (hours < 48) return 'warning';
+  return '';
+}
+
+function consumptionTableMarkup(item) {
+  const rows = (item.buckets || []).filter((bucket) => Number(bucket.consumption || 0) > 0 || bucket.observed !== false);
+  if (!rows.length) return '<div class="empty-state compact-empty">该周期还没有趋势数据</div>';
+  return `<div class="chart-table-wrap"><table class="chart-table">
+    <thead><tr><th scope="col">时间</th><th scope="col">消耗</th><th scope="col">余额</th><th scope="col">充值</th></tr></thead>
+    <tbody>${rows.map((bucket) => {
+      const balance = finiteNumberOrNull(bucket.balance);
+      const recharge = Number(bucket.recharge || 0);
+      return `<tr><th scope="row">${escapeHtml(chartTimeLabel(bucket.started_at, item.period))}</th><td>$${escapeHtml(numberText(bucket.consumption, '0'))}</td><td>${bucket.observed === false || balance === null ? '<span class="muted">无快照</span>' : `$${escapeHtml(numberText(balance))}`}</td><td>${recharge > 0 ? `$${escapeHtml(numberText(recharge))}` : '<span class="muted">-</span>'}</td></tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+function bindConsumptionChart(root) {
+  const wrap = root.querySelector('.consumption-chart-wrap');
+  if (!wrap) return;
+  const item = consumptionForSite(wrap.dataset.chartSite);
+  const tooltip = wrap.querySelector('.chart-tooltip');
+  const plot = wrap.querySelector('.chart-plot');
+  const hide = () => { tooltip.hidden = true; wrap.querySelectorAll('.chart-hit.active').forEach((hit) => hit.classList.remove('active')); };
+  const show = (hit) => {
+    const bucket = item?.buckets?.[Number(hit.dataset.bucketIndex)];
+    if (!bucket) return;
+    const readout = bucketReadout(bucket, item);
+    tooltip.replaceChildren();
+    const time = document.createElement('div');
+    time.className = 'chart-tooltip-time';
+    time.textContent = readout.time;
+    tooltip.append(time);
+    readout.rows.forEach((row) => {
+      const line = document.createElement('div');
+      line.className = `chart-tooltip-row ${row.key}`;
+      const value = document.createElement('strong');
+      value.textContent = row.value;
+      const label = document.createElement('span');
+      label.textContent = row.label;
+      line.append(value, label);
+      tooltip.append(line);
+    });
+    wrap.querySelectorAll('.chart-hit.active').forEach((other) => other.classList.remove('active'));
+    hit.classList.add('active');
+    tooltip.hidden = false;
+    const bounds = plot.getBoundingClientRect();
+    const anchor = hit.getBoundingClientRect();
+    const center = anchor.left + anchor.width / 2 - bounds.left;
+    tooltip.style.left = `${Math.min(Math.max(center, tooltip.offsetWidth / 2 + 4), bounds.width - tooltip.offsetWidth / 2 - 4)}px`;
+  };
+  wrap.querySelectorAll('.chart-hit').forEach((hit) => {
+    hit.addEventListener('pointerenter', () => show(hit));
+    hit.addEventListener('focus', () => show(hit));
+    hit.addEventListener('blur', hide);
+  });
+  plot.addEventListener('pointerleave', hide);
 }
 
 async function loadConsumption({ quiet = false } = {}) {
@@ -1405,6 +1583,7 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.monitorStatus) { state.monitorStatus = target.dataset.monitorStatus; renderMonitoring(); refreshIcons(); return; }
   if (target.dataset.consumptionPeriod) { state.consumption.period = target.dataset.consumptionPeriod; await loadConsumption(); return; }
   if (target.dataset.consumptionSite) { state.consumption.selectedSiteId = Number(target.dataset.consumptionSite); renderConsumptionDashboard(); return; }
+  if (target.dataset.consumptionTable) { state.consumption.showTable = !state.consumption.showTable; renderConsumptionDashboard(); return; }
   if (target.dataset.toggleSite) { const id = Number(target.dataset.toggleSite); state.expandedSites.has(id) ? state.expandedSites.delete(id) : state.expandedSites.add(id); renderMonitoring(); refreshIcons(); return; }
   if (target.dataset.toggleKeySite) { const id = Number(target.dataset.toggleKeySite); state.expandedKeySites.has(id) ? state.expandedKeySites.delete(id) : state.expandedKeySites.add(id); renderGlobalKeys(); refreshIcons(); return; }
   if (target.dataset.detailSite) return openDetail(Number(target.dataset.detailSite));
