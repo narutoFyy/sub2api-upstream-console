@@ -1,7 +1,7 @@
 const repo = require('./repository');
 const { fetchSub2APIState } = require('./upstreamClient');
 const { nowIso, finiteNumberOrNull } = require('./utils');
-const { evaluateSiteAlerts, notifyRateIncreases } = require('./alertService');
+const { evaluateSiteAlerts, notifyRateIncreases, notifyRateDecreases } = require('./alertService');
 const { runtimeSettingsStatus } = require('./runtimeSettings');
 
 function rechargeSummary(snapshot) {
@@ -92,6 +92,13 @@ async function syncSite(siteId, dependencies = {}) {
       repo: repository
     }).catch((error) => {
       console.error(`Rate increase notification failed for upstream ${siteId}:`, error.message);
+    });
+    (dependencies.notifyRateDecreases || notifyRateDecreases)(siteId, {
+      ...dependencies,
+      settings,
+      repo: repository
+    }).catch((error) => {
+      console.error(`Rate decrease notification failed for upstream ${siteId}:`, error.message);
     });
     return result;
   } catch (err) {

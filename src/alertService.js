@@ -51,7 +51,8 @@ function eventDeliveryEnabled(eventType, settings) {
     key_connectivity: settings.notify_key_connectivity,
     low_balance: settings.notify_low_balance,
     sync_failed: settings.notify_sync_failure,
-    rate_increase: settings.notify_rate_increase
+    rate_increase: settings.notify_rate_increase,
+    rate_decrease: settings.notify_rate_decrease
   }[eventType];
   if (toggle === undefined || toggle === null) return true;
   if (typeof toggle === 'string') return !['', '0', 'false', 'off', 'no'].includes(toggle.trim().toLowerCase());
@@ -109,7 +110,7 @@ function groupNotifications(items, grouping) {
   if (grouping === 'key') return items.map((item) => [item]);
   const groups = new Map();
   for (const item of items) {
-    const scope = item.event_type === 'rate_increase' ? 'rate_increase' : item.kind;
+    const scope = ['rate_increase', 'rate_decrease'].includes(item.event_type) ? item.event_type : item.kind;
     const key = `${scope}:${item.upstream_site_id ?? 'global'}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
@@ -221,24 +222,28 @@ async function evaluateKeyConnectivity(site, key, state, dependencies = {}) {
   return null;
 }
 
-function rateIncreaseMessage(site, entries) {
+function rateChangeMessage(site, entries, direction) {
   const lines = entries.map((entry) => {
     const percent = finiteNumberOrNull(entry.change_percent);
-    const percentText = percent === null ? '' : `（+${percent.toFixed(2)}%）`;
+    const percentText = percent === null ? '' : `（${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%）`;
     const keyNames = entry.keys.map((key) => key.name || key.key_masked || key.upstream_key_id).filter(Boolean);
     const keyText = keyNames.length
       ? `\n   受影响 Key：${keyNames.slice(0, 8).join('、')}${keyNames.length > 8 ? ` 等 ${keyNames.length} 个` : ''}`
       : '';
     return `· ${entry.group_name || entry.group_id || '未命名分组'}：${entry.old_rate} → ${entry.new_rate}${percentText}${keyText}`;
   });
-  return `上游：${site.name}\n检测到分组倍率上涨：\n${lines.join('\n')}\n时间：${new Date().toISOString()}`;
+  return `上游：${site.name}\n检测到分组倍率${direction}：\n${lines.join('\n')}\n时间：${new Date().toISOString()}`;
 }
 
-async function notifyRateIncreases(siteId, dependencies = {}) {
+async function notifyRateChanges(siteId, direction, dependencies = {}) {
   const repository = dependencies.repo || repo;
   const settings = alertSettings(dependencies);
-  if (typeof repository.listPendingRateIncreases !== 'function') return { notified: 0 };
-  const pending = repository.listPendingRateIncreases(siteId);
+  const eventType = direction === '下降' ? 'rate_decrease' : 'rate_increase';
+  const listPending = direction === '下降'
+    ? repository.listPendingRateDecreases
+    : repository.listPendingRateIncreases;
+  if (typeof listPending !== 'function') return { notified: 0 };
+  const pending = listPending.call(repository, siteId);
   if (!pending.length) return { notified: 0 };
 
   const site = repository.listSites().find((item) => Number(item.id) === Number(siteId));
@@ -258,24 +263,32 @@ async function notifyRateIncreases(siteId, dependencies = {}) {
   const notification = {
     kind: 'incident',
     alert: {},
-    event_type: 'rate_increase',
     severity: 'warning',
     delivery_enabled: deliveryEnabled,
     upstream_site_id: site.id,
     upstream_name: site.name,
-    title: `[涨价通知] ${site.name} · ${affected.length} 个分组`,
-    message: rateIncreaseMessage(site, affected)
+    event_type: eventType,
+    title: `[${direction === '下降' ? '降价' : '涨价'}通知] ${site.name} · ${affected.length} 个分组`,
+    message: rateChangeMessage(site, affected, direction)
   };
 
   if (!settings.notifications_enabled
     || !deliveryEnabled
-    || !eventDeliveryEnabled('rate_increase', settings)
+    || !eventDeliveryEnabled(eventType, settings)
     || quietHoursBlock(settings, notification.severity, new Date())) {
     return { notified: 0 };
   }
 
   const delivery = await deliverAlertNotifications([notification], { ...dependencies, settings });
   return { notified: delivery.errors.length ? 0 : 1, errors: delivery.errors, groups: affected.length };
+}
+
+async function notifyRateIncreases(siteId, dependencies = {}) {
+  return notifyRateChanges(siteId, '上涨', dependencies);
+}
+
+async function notifyRateDecreases(siteId, dependencies = {}) {
+  return notifyRateChanges(siteId, '下降', dependencies);
 }
 
 async function evaluateSiteAlerts(siteId, dependencies = {}) {
@@ -354,5 +367,6 @@ module.exports = {
   resolveAndNotify,
   evaluateKeyConnectivity,
   evaluateSiteAlerts,
-  notifyRateIncreases
+  notifyRateIncreases,
+  notifyRateDecreases
 };

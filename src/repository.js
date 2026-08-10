@@ -942,6 +942,18 @@ function listPendingRateIncreases(siteId) {
   `).all(siteId);
 }
 
+function listPendingRateDecreases(siteId) {
+  return db.prepare(`
+    SELECT *
+    FROM rate_change_events
+    WHERE upstream_site_id = ?
+      AND notified_at IS NULL
+      AND old_rate IS NOT NULL
+      AND new_rate < old_rate
+    ORDER BY detected_at ASC, id ASC
+  `).all(siteId);
+}
+
 function markRateChangeNotified(ids = []) {
   if (!ids.length) return 0;
   const now = nowIso();
@@ -2046,6 +2058,7 @@ module.exports = {
   getModelPricingBoard,
   listKeysInGroup,
   listPendingRateIncreases,
+  listPendingRateDecreases,
   markRateChangeNotified,
   listRateChanges,
   countUnacknowledgedRateChanges,
