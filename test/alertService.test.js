@@ -7,7 +7,8 @@ const {
   evaluateKeyConnectivity,
   evaluateSiteAlerts,
   deliverAlertNotifications,
-  isQuietHours
+  isQuietHours,
+  notifyRateIncreases
 } = require('../src/alertService');
 
 function alertRepository() {
@@ -433,4 +434,76 @@ test('acknowledged incidents suppress retries but still resolve on recovery', as
   });
   assert.equal(recovered.alert.status, 'resolved');
   assert.ok(recovered.notification);
+});
+
+function rateIncreaseRepository(pending, keysByGroup) {
+  const marked = [];
+  return {
+    marked,
+    listSites: () => [{ id: 1, name: '上游 A', alert_notifications_enabled: 1 }],
+    listPendingRateIncreases: () => pending,
+    listKeysInGroup: (siteId, groupId) => keysByGroup[groupId] || [],
+    markRateChangeNotified(ids) { marked.push(...ids); return ids.length; }
+  };
+}
+
+const rateSettings = {
+  notifications_enabled: 1,
+  notify_rate_increase: 1,
+  notification_grouping: 'site',
+  pushplus_timeout_ms: 5000,
+  quiet_hours_enabled: 0
+};
+
+test('rate increase notification names only groups holding our keys', async () => {
+  const pending = [
+    { id: 11, group_id: 'g1', group_name: '分组一', old_rate: 0.02, new_rate: 0.025, change_percent: 25 },
+    { id: 12, group_id: 'ghost', group_name: '幽灵', old_rate: 1, new_rate: 2, change_percent: 100 }
+  ];
+  const repository = rateIncreaseRepository(pending, { g1: [{ name: 'key-a' }] });
+  let payload = null;
+
+  const result = await notifyRateIncreases(1, {
+    repo: repository,
+    settings: rateSettings,
+    notify: async (item) => { payload = item; }
+  });
+
+  assert.equal(result.notified, 1);
+  assert.equal(result.groups, 1);
+  assert.match(payload.content || payload.message, /分组一/);
+  assert.doesNotMatch(payload.content || payload.message, /幽灵/);
+  assert.match(payload.content || payload.message, /key-a/);
+  assert.deepEqual(repository.marked, [11, 12]);
+});
+
+test('rate increase notification consumes rows even when no key is affected', async () => {
+  const pending = [{ id: 21, group_id: 'ghost', group_name: '幽灵', old_rate: 1, new_rate: 2, change_percent: 100 }];
+  const repository = rateIncreaseRepository(pending, {});
+  let called = false;
+
+  const result = await notifyRateIncreases(1, {
+    repo: repository,
+    settings: rateSettings,
+    notify: async () => { called = true; }
+  });
+
+  assert.equal(result.notified, 0);
+  assert.equal(called, false);
+  assert.deepEqual(repository.marked, [21]);
+});
+
+test('rate increase notification respects the notify_rate_increase toggle', async () => {
+  const pending = [{ id: 31, group_id: 'g1', group_name: '分组一', old_rate: 0.02, new_rate: 0.03, change_percent: 50 }];
+  const repository = rateIncreaseRepository(pending, { g1: [{ name: 'key-a' }] });
+  let called = false;
+
+  const result = await notifyRateIncreases(1, {
+    repo: repository,
+    settings: { ...rateSettings, notify_rate_increase: 0 },
+    notify: async () => { called = true; }
+  });
+
+  assert.equal(result.notified, 0);
+  assert.equal(called, false);
 });

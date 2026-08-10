@@ -47,11 +47,15 @@ function isQuietHours(settings, date = new Date()) {
 }
 
 function eventDeliveryEnabled(eventType, settings) {
-  return {
+  const toggle = {
     key_connectivity: settings.notify_key_connectivity,
     low_balance: settings.notify_low_balance,
-    sync_failed: settings.notify_sync_failure
-  }[eventType] !== false;
+    sync_failed: settings.notify_sync_failure,
+    rate_increase: settings.notify_rate_increase
+  }[eventType];
+  if (toggle === undefined || toggle === null) return true;
+  if (typeof toggle === 'string') return !['', '0', 'false', 'off', 'no'].includes(toggle.trim().toLowerCase());
+  return Boolean(Number(toggle));
 }
 
 function quietHoursBlock(settings, severity, now) {
@@ -105,7 +109,8 @@ function groupNotifications(items, grouping) {
   if (grouping === 'key') return items.map((item) => [item]);
   const groups = new Map();
   for (const item of items) {
-    const key = `${item.kind}:${item.upstream_site_id ?? 'global'}`;
+    const scope = item.event_type === 'rate_increase' ? 'rate_increase' : item.kind;
+    const key = `${scope}:${item.upstream_site_id ?? 'global'}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
@@ -128,8 +133,10 @@ async function deliverAlertNotifications(items, dependencies = {}) {
         timeoutMs: settings.pushplus_timeout_ms
       });
       for (const item of group) {
-        if (item.kind === 'recovery') repository.markRecoveryNotified(item.alert.id);
-        else repository.markAlertNotified(item.alert.id);
+        const alertId = item.alert?.id;
+        if (alertId == null) continue;
+        if (item.kind === 'recovery') repository.markRecoveryNotified(alertId);
+        else repository.markAlertNotified(alertId);
       }
       sent += 1;
     } catch (error) {
@@ -214,6 +221,63 @@ async function evaluateKeyConnectivity(site, key, state, dependencies = {}) {
   return null;
 }
 
+function rateIncreaseMessage(site, entries) {
+  const lines = entries.map((entry) => {
+    const percent = finiteNumberOrNull(entry.change_percent);
+    const percentText = percent === null ? '' : `（+${percent.toFixed(2)}%）`;
+    const keyNames = entry.keys.map((key) => key.name || key.key_masked || key.upstream_key_id).filter(Boolean);
+    const keyText = keyNames.length
+      ? `\n   受影响 Key：${keyNames.slice(0, 8).join('、')}${keyNames.length > 8 ? ` 等 ${keyNames.length} 个` : ''}`
+      : '';
+    return `· ${entry.group_name || entry.group_id || '未命名分组'}：${entry.old_rate} → ${entry.new_rate}${percentText}${keyText}`;
+  });
+  return `上游：${site.name}\n检测到分组倍率上涨：\n${lines.join('\n')}\n时间：${new Date().toISOString()}`;
+}
+
+async function notifyRateIncreases(siteId, dependencies = {}) {
+  const repository = dependencies.repo || repo;
+  const settings = alertSettings(dependencies);
+  if (typeof repository.listPendingRateIncreases !== 'function') return { notified: 0 };
+  const pending = repository.listPendingRateIncreases(siteId);
+  if (!pending.length) return { notified: 0 };
+
+  const site = repository.listSites().find((item) => Number(item.id) === Number(siteId));
+  if (!site) return { notified: 0 };
+
+  const affected = [];
+  for (const event of pending) {
+    const keys = repository.listKeysInGroup(siteId, event.group_id, event.group_name) || [];
+    if (keys.length) affected.push({ ...event, keys });
+  }
+
+  // Consume every pending row, so groups without our keys never re-check on each sync.
+  repository.markRateChangeNotified(pending.map((item) => item.id));
+  if (!affected.length) return { notified: 0 };
+
+  const deliveryEnabled = Number(site.alert_notifications_enabled ?? 1) !== 0;
+  const notification = {
+    kind: 'incident',
+    alert: {},
+    event_type: 'rate_increase',
+    severity: 'warning',
+    delivery_enabled: deliveryEnabled,
+    upstream_site_id: site.id,
+    upstream_name: site.name,
+    title: `[涨价通知] ${site.name} · ${affected.length} 个分组`,
+    message: rateIncreaseMessage(site, affected)
+  };
+
+  if (!settings.notifications_enabled
+    || !deliveryEnabled
+    || !eventDeliveryEnabled('rate_increase', settings)
+    || quietHoursBlock(settings, notification.severity, new Date())) {
+    return { notified: 0 };
+  }
+
+  const delivery = await deliverAlertNotifications([notification], { ...dependencies, settings });
+  return { notified: delivery.errors.length ? 0 : 1, errors: delivery.errors, groups: affected.length };
+}
+
 async function evaluateSiteAlerts(siteId, dependencies = {}) {
   const repository = dependencies.repo || repo;
   const settings = alertSettings(dependencies);
@@ -289,5 +353,6 @@ module.exports = {
   openAndNotify,
   resolveAndNotify,
   evaluateKeyConnectivity,
-  evaluateSiteAlerts
+  evaluateSiteAlerts,
+  notifyRateIncreases
 };

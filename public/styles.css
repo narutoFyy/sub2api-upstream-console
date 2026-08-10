@@ -272,6 +272,7 @@ svg { display: block; }
 .consumption-stat.hero strong { font-size: 26px; font-variant-numeric: normal; letter-spacing: -.01em; }
 .consumption-stat strong.warning { color: var(--warning); }
 .consumption-stat strong.danger { color: var(--danger); }
+.consumption-stat-note { display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px; line-height: 1.35; }
 .consumption-chart-wrap { min-width: 0; --series-balance: #2a78d6; --series-consumption: #eb6834; }
 :root[data-theme="dark"] .consumption-chart-wrap { --series-balance: #3987e5; --series-consumption: #d95926; }
 .chart-legend-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 8px; color: var(--text-secondary); font-size: 12px; }
@@ -387,6 +388,21 @@ svg { display: block; }
 .upstream-identity { min-width: 0; }
 .upstream-identity strong { display: block; font-size: 15px; font-weight: 720; }
 .upstream-identity small, .cell-stack small { display: block; margin-top: 4px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upstream-name-link { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-size: 15px; font-weight: 720; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upstream-name-link:hover { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.upstream-name-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.upstream-url-link { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin-top: 4px; color: var(--text-muted); font-size: 12px; text-decoration: none; }
+.upstream-url-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upstream-url-link i { flex: none; width: 12px; height: 12px; opacity: .65; }
+.upstream-url-link:hover { color: var(--primary); }
+.upstream-url-link:hover i { opacity: 1; }
+.upstream-url-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+#detailSubtitle { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.detail-site-link { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); text-decoration: none; }
+.detail-site-link:hover { color: var(--primary); }
+.detail-site-link i { width: 12px; height: 12px; opacity: .65; }
+.detail-username { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); }
+.detail-username i { width: 13px; height: 13px; opacity: .7; }
 .cell-stack { min-width: 0; max-width: 100%; }
 .sync-cell { width: 100%; }
 .sync-error { max-width: 100%; cursor: help; }
@@ -459,14 +475,31 @@ svg { display: block; }
 .event-main small { display: block; margin-top: 5px; color: var(--text-muted); overflow-wrap: anywhere; }
 .empty-state { min-height: 120px; display: flex; align-items: center; justify-content: center; padding: 20px; color: var(--text-muted); text-align: center; }
 
-.pricing-board { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.pricing-section { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
-.pricing-section > h3 { padding: 16px 18px; border-bottom: 1px solid var(--border); }
-.model-row { padding: 14px 18px; border-bottom: 1px solid var(--border); }
-.model-row:last-child { border-bottom: 0; }
-.model-row-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.model-price-list { display: grid; gap: 8px; margin-top: 10px; }
-.model-price-line { display: grid; grid-template-columns: minmax(110px, 1fr) auto; gap: 12px; color: var(--text-secondary); font-size: 12px; }
+.pricing-board { display: grid; gap: 10px; }
+.rate-board-summary { color: var(--text-muted); font-size: 12px; }
+.rate-site { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.rate-site.expanded { border-color: var(--border-strong); }
+.rate-site-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px; }
+.rate-site-head:hover { background: var(--surface-hover); }
+.rate-site-toggle { flex: none; display: inline-flex; padding: 0; background: none; border: 0; cursor: pointer; color: var(--text-muted); }
+.rate-site-link.plain { color: var(--text); }
+.rate-site-main { display: flex; align-items: baseline; gap: 10px; flex: 1; min-width: 0; }
+.rate-site-main > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rate-site-link { color: var(--primary); font-weight: 600; text-decoration: none; }
+.rate-site-link:hover { text-decoration: underline; }
+.rate-badge { flex: none; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rate-badge.good { background: var(--healthy-soft); color: var(--healthy); }
+.rate-badge.normal { background: var(--primary-soft); color: var(--primary); }
+.rate-badge.high { background: var(--warning-soft); color: var(--warning); }
+.rate-badge.muted { background: var(--surface-subtle); color: var(--text-muted); }
+.rate-group-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.rate-group-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 12px 14px; }
+.rate-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.rate-group-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rate-detail-list { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.rate-detail-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; font-size: 12px; }
+.rate-detail-line strong { font-variant-numeric: tabular-nums; }
+.rate-empty { color: var(--text-muted); font-size: 12px; }
 
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .setting-section { min-height: 100px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px; }

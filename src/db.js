@@ -494,6 +494,7 @@ ensureColumn('upstream_sites', 'codex_aliases', `TEXT NOT NULL DEFAULT '["codex"
 ensureColumn('upstream_sites', 'upstream_type', `TEXT NOT NULL DEFAULT 'auto'`);
 ensureColumn('upstream_sites', 'low_balance_threshold', 'REAL NOT NULL DEFAULT 10');
 ensureColumn('upstream_sites', 'rate_change_threshold_percent', 'REAL NOT NULL DEFAULT 20');
+ensureColumn('rate_change_events', 'notified_at', 'TEXT');
 ensureColumn('upstream_sites', 'sync_enabled', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('upstream_sites', 'key_check_interval_seconds', 'INTEGER NOT NULL DEFAULT 300');
 ensureColumn('upstream_sites', 'key_check_enabled', 'INTEGER NOT NULL DEFAULT 1');

@@ -706,6 +706,10 @@ app.get('/api/model-pricing/board', (req, res) => {
   res.json(repo.getModelPricingBoard());
 });
 
+app.get('/api/group-rates/board', (req, res) => {
+  res.json({ items: repo.getGroupRateBoard() });
+});
+
 app.get('/api/upstream-keys', async (req, res, next) => {
   try {
     const upstreamSiteId = req.query.upstream_site_id ? Number(req.query.upstream_site_id) : null;

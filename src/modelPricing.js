@@ -202,6 +202,73 @@ function rateFamily(rate) {
   return 'other';
 }
 
+function groupRateBoard(rateRows = []) {
+  const sites = new Map();
+  for (const row of rateRows) {
+    const siteId = Number(row?.upstream_site_id);
+    if (!Number.isFinite(siteId)) continue;
+    if (!sites.has(siteId)) {
+      sites.set(siteId, {
+        upstream_site_id: siteId,
+        upstream_name: row.upstream_name || '',
+        base_url: row.base_url || '',
+        upstream_type: row.upstream_type || '',
+        groups: new Map()
+      });
+    }
+    const site = sites.get(siteId);
+    const groupKey = `${row.group_id || ''}::${row.group_name || ''}`;
+    if (!site.groups.has(groupKey)) {
+      site.groups.set(groupKey, {
+        group_id: row.group_id || '',
+        group_name: row.group_name || row.group_id || 'default',
+        rates: []
+      });
+    }
+    site.groups.get(groupKey).rates.push({
+      scope: row.scope || '',
+      model: row.model || '',
+      rate: finiteNumber(row.rate),
+      family: rateFamily(row),
+      captured_at: row.captured_at || ''
+    });
+  }
+
+  const out = [];
+  for (const site of sites.values()) {
+    const groups = [];
+    for (const group of site.groups.values()) {
+      const values = group.rates.map((item) => item.rate).filter((value) => value !== null);
+      group.rates.sort((a, b) => (a.scope || '').localeCompare(b.scope || '') || (a.model || '').localeCompare(b.model || ''));
+      groups.push({
+        ...group,
+        rate_count: group.rates.length,
+        min_rate: values.length ? Math.min(...values) : null,
+        max_rate: values.length ? Math.max(...values) : null
+      });
+    }
+    groups.sort((a, b) => {
+      const left = a.min_rate === null ? Infinity : a.min_rate;
+      const right = b.min_rate === null ? Infinity : b.min_rate;
+      if (left !== right) return left - right;
+      return a.group_name.localeCompare(b.group_name);
+    });
+    const allRates = groups.flatMap((group) => group.rates.map((item) => item.rate)).filter((value) => value !== null);
+    out.push({
+      upstream_site_id: site.upstream_site_id,
+      upstream_name: site.upstream_name,
+      base_url: site.base_url,
+      upstream_type: site.upstream_type,
+      group_count: groups.length,
+      min_rate: allRates.length ? Math.min(...allRates) : null,
+      max_rate: allRates.length ? Math.max(...allRates) : null,
+      groups
+    });
+  }
+  out.sort((a, b) => a.upstream_name.localeCompare(b.upstream_name, 'zh-Hans-CN'));
+  return out;
+}
+
 function summarizePlatformRates(rates = []) {
   const openaiRates = [];
   const anthropicRates = [];
@@ -353,6 +420,7 @@ module.exports = {
   calculatePricingFields,
   getBuiltinOfficialModels,
   groupModelPricingBoard,
+  groupRateBoard,
   isSub2APIPricingSite,
   isSub2APIPricingUpstreamType,
   isWatchedBoardModel,

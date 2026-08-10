@@ -2,7 +2,7 @@ const db = require('./db');
 const { encryptSecret, decryptSecret, maskSecret } = require('./crypto');
 const config = require('./config');
 const { normalizeBaseUrl, nowIso, safeJson } = require('./utils');
-const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard, isSub2APIPricingSite, resolveOfficialPricingRows, summarizePlatformRates } = require('./modelPricing');
+const { buildSub2APISiteModelPricing, calculatePricingFields, groupModelPricingBoard, groupRateBoard, isSub2APIPricingSite, resolveOfficialPricingRows, summarizePlatformRates } = require('./modelPricing');
 const { normalizeSub2APIKey, isCompleteApiKey } = require('./upstreamKeys');
 
 function sanitizeConnectivityError(value) {
@@ -930,6 +930,43 @@ function listRates(siteId, limit = 200) {
   `).all(siteId, limit);
 }
 
+function listPendingRateIncreases(siteId) {
+  return db.prepare(`
+    SELECT *
+    FROM rate_change_events
+    WHERE upstream_site_id = ?
+      AND notified_at IS NULL
+      AND old_rate IS NOT NULL
+      AND new_rate > old_rate
+    ORDER BY detected_at ASC, id ASC
+  `).all(siteId);
+}
+
+function markRateChangeNotified(ids = []) {
+  if (!ids.length) return 0;
+  const now = nowIso();
+  const statement = db.prepare('UPDATE rate_change_events SET notified_at = COALESCE(notified_at, ?) WHERE id = ?');
+  const run = db.transaction((list) => {
+    let changed = 0;
+    for (const id of list) changed += statement.run(now, id).changes;
+    return changed;
+  });
+  return run(ids);
+}
+
+function listKeysInGroup(siteId, groupId, groupName = '') {
+  return db.prepare(`
+    SELECT upstream_key_id, name, key_masked, group_id, group_name, platform, status
+    FROM upstream_api_key_snapshots
+    WHERE upstream_site_id = ?
+      AND (
+        (? <> '' AND group_id = ?)
+        OR (? <> '' AND group_name = ?)
+      )
+    ORDER BY name COLLATE NOCASE, upstream_key_id
+  `).all(siteId, String(groupId || ''), String(groupId || ''), String(groupName || ''), String(groupName || ''));
+}
+
 function listRateChanges(limit = 100) {
   return db.prepare(`
     SELECT e.*, s.name AS upstream_name, s.base_url
@@ -1048,6 +1085,22 @@ function listLatestRatesForBoard(limit = 1000) {
 
 function getModelPricingBoard() {
   return groupModelPricingBoard(listAllModelPricing(5000), listLatestRatesForBoard(5000));
+}
+
+function getGroupRateBoard() {
+  const sites = listSites();
+  const board = groupRateBoard(listLatestRatesForBoard(5000));
+  const byId = new Map(board.map((entry) => [entry.upstream_site_id, entry]));
+  return sites.map((site) => byId.get(site.id) || {
+    upstream_site_id: site.id,
+    upstream_name: site.name || '',
+    base_url: site.base_url || '',
+    upstream_type: site.upstream_type || '',
+    group_count: 0,
+    min_rate: null,
+    max_rate: null,
+    groups: []
+  });
 }
 
 function countUnacknowledgedRateChanges() {
@@ -1989,7 +2042,11 @@ module.exports = {
   getDetailPricingSummary,
   listModelPricing,
   listAllModelPricing,
+  getGroupRateBoard,
   getModelPricingBoard,
+  listKeysInGroup,
+  listPendingRateIncreases,
+  markRateChangeNotified,
   listRateChanges,
   countUnacknowledgedRateChanges,
   acknowledgeRateChange,

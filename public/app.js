@@ -18,10 +18,12 @@ const state = {
   logs: [],
   rateChanges: [],
   pricing: { openai: [], claude: [] },
+  groupRates: [],
   ownSites: [],
   ownRoutes: [],
   expandedSites: new Set(),
   expandedKeySites: new Set(),
+  expandedRateSites: new Set(),
   monitorStatus: 'all',
   monitorSort: 'balance-asc',
   search: '',
@@ -217,6 +219,24 @@ function consumptionSpeedText(item) {
   if (!item?.enough_data || item.average_per_hour == null) return '数据不足';
   if (state.consumption.period === '24h') return `$${numberText(item.average_per_hour, '0')} / 小时`;
   return `$${numberText(item.average_per_day, '0')} / 天`;
+}
+
+const RECENT_TREND_RATIO = 1.25;
+
+function recentTrend(item) {
+  const average = finiteNumberOrNull(item?.average_per_hour);
+  const recent = finiteNumberOrNull(item?.recent_per_hour);
+  if (!item?.enough_data || !average || recent === null) return null;
+  const ratio = recent / average;
+  if (ratio >= RECENT_TREND_RATIO) return { direction: 'up', ratio, recent };
+  if (ratio <= 1 / RECENT_TREND_RATIO) return { direction: 'down', ratio, recent };
+  return null;
+}
+
+function recentSpeedText(item) {
+  const trend = recentTrend(item);
+  if (!trend) return '与窗口均速持平';
+  return `近期 $${numberText(trend.recent, '0')} / 小时 ${trend.direction === 'up' ? '↑' : '↓'} ${numberText(trend.ratio, '0')}×`;
 }
 
 function consumptionCoverageText(item) {
@@ -432,16 +452,23 @@ function renderConsumptionDashboard() {
   const stats = [
     { label: '当前余额', value: selected.current_balance == null ? '-' : `$${numberText(selected.current_balance)}`, hero: true },
     { label: '周期消耗', value: consumptionAmountText(selected) },
-    { label: '消耗速度', value: consumptionSpeedText(selected) },
-    { label: '预计可用', value: runwayText(selected), tone: runwayTone(selected) }
+    { label: '消耗速度', value: consumptionSpeedText(selected), note: recentSpeedText(selected) },
+    { label: '预计可用', value: runwayText(selected), tone: runwayTone(selected), note: runwayBasisText(selected) }
   ];
   detail.innerHTML = `<div class="consumption-detail-head">
       <div><h3>${escapeHtml(selected.name)}</h3><span class="muted">${escapeHtml(consumptionCoverageText(selected))} · ${selected.estimated ? '余额估算' : '实际成本'}${Number(selected.recharge || 0) > 0 ? ` · 期间充值 $${numberText(selected.recharge)}` : ''}</span></div>
       <button class="chart-table-toggle" type="button" data-consumption-table="${selected.id}">${state.consumption.showTable ? '看图表' : '看数据'}</button>
     </div>
-    <div class="consumption-stat-row">${stats.map((stat) => `<div class="consumption-stat${stat.hero ? ' hero' : ''}"><span>${escapeHtml(stat.label)}</span><strong class="${stat.tone || ''}">${escapeHtml(stat.value)}</strong></div>`).join('')}</div>
+    <div class="consumption-stat-row">${stats.map((stat) => `<div class="consumption-stat${stat.hero ? ' hero' : ''}"><span>${escapeHtml(stat.label)}</span><strong class="${stat.tone || ''}">${escapeHtml(stat.value)}</strong>${stat.note ? `<small class="consumption-stat-note">${escapeHtml(stat.note)}</small>` : ''}</div>`).join('')}</div>
     ${state.consumption.showTable ? consumptionTableMarkup(selected) : consumptionChartMarkup(selected)}`;
   bindConsumptionChart(detail);
+}
+
+function runwayBasisText(item) {
+  if (!item?.enough_data || finiteNumberOrNull(item?.runway_hours) === null) return '';
+  const trend = recentTrend(item);
+  if (!trend) return '按加权近期速度';
+  return trend.direction === 'up' ? '按加权近期速度 · 正在加速' : '按加权近期速度 · 正在放缓';
 }
 
 function runwayTone(item) {
@@ -589,6 +616,12 @@ function filteredMonitoringSites() {
   });
 }
 
+function upstreamIdentityMarkup(site) {
+  const name = escapeHtml(site.name);
+  const url = escapeHtml(site.base_url);
+  return `<button class="upstream-name-link" type="button" data-detail-site="${site.id}" title="查看 ${name} 详情">${name}</button><a class="upstream-url-link" href="${url}" target="_blank" rel="noopener noreferrer" title="在新标签打开 ${url}"><span>${url}</span><i data-lucide="external-link"></i></a>`;
+}
+
 function renderUpstreamActions(site) {
   const name = escapeHtml(site.name);
   return `<div class="row-actions upstream-row-actions"><button class="icon-btn" type="button" data-sync-site="${site.id}" title="同步余额和 Key" aria-label="${name} 同步余额和 Key"><i data-lucide="refresh-cw"></i></button><button class="icon-btn" type="button" data-sync-site-models="${site.id}" title="同步支持模型" aria-label="${name} 同步支持模型"><i data-lucide="boxes"></i></button><button class="icon-btn" type="button" data-detail-site="${site.id}" title="查看详情" aria-label="查看 ${name} 详情"><i data-lucide="panel-right-open"></i></button><button class="icon-btn danger-text" type="button" data-delete-upstream="${site.id}" data-upstream-name="${name}" title="永久删除" aria-label="永久删除 ${name}"><i data-lucide="trash-2"></i></button></div>`;
@@ -612,7 +645,7 @@ function renderMonitoring() {
     const consumption = consumptionForSite(site.id);
     return `
       <tr class="data-row">
-        <td><div class="upstream-name-cell"><button class="row-chevron ${expanded ? 'expanded' : ''}" type="button" data-toggle-site="${site.id}" aria-label="展开 ${escapeHtml(site.name)}"><i data-lucide="chevron-right"></i></button><div class="upstream-identity"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></div></td>
+        <td><div class="upstream-name-cell"><button class="row-chevron ${expanded ? 'expanded' : ''}" type="button" data-toggle-site="${site.id}" aria-label="展开 ${escapeHtml(site.name)}"><i data-lucide="chevron-right"></i></button><div class="upstream-identity">${upstreamIdentityMarkup(site)}</div></div></td>
         <td><strong class="balance-value ${balanceClass}">${site.balance == null ? '-' : `$${numberText(site.balance)}`}</strong><span class="balance-meta ${site.balance_stale ? 'warning-text' : ''}">${site.balance_stale ? '数据已过期 · ' : ''}${ageText(site.balance_age_ms)}</span></td>
         <td><div class="cell-stack consumption-cell"><strong>${escapeHtml(consumptionAmountText(consumption))}</strong><small>${escapeHtml(consumptionCoverageText(consumption))}</small></div></td>
         <td><div class="cell-stack consumption-cell"><strong>${escapeHtml(consumptionSpeedText(consumption))}</strong><small>${consumption?.estimated ? '余额变化估算' : consumption ? '实际成本' : '-'}</small></div></td>
@@ -696,7 +729,7 @@ function renderGlobalKeys() {
     const active = keys.filter((key) => key.status === 'active').length;
     const inactive = keys.filter((key) => key.status !== 'active').length;
     const failed = keys.filter((key) => ['timeout', 'auth_failed', 'quota_exhausted', 'upstream_error'].includes(key.connectivity_status)).length;
-    return `<tr class="data-row"><td><div class="upstream-name-cell"><button class="row-chevron ${expanded ? 'expanded' : ''}" type="button" data-toggle-key-site="${site.id}" aria-label="展开 ${escapeHtml(site.name)}"><i data-lucide="chevron-right"></i></button><div class="upstream-identity"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></div></td><td>${keys.length}</td><td class="healthy-text">${active}</td><td>${inactive}</td><td class="${failed ? 'danger-text' : ''}">${failed}</td><td>${timeText(site.last_sync_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-import-keys="${site.id}" title="导入全部 Key"><i data-lucide="download"></i></button><button class="icon-btn" type="button" data-check-site-keys="${site.id}" title="检测全部 Key"><i data-lucide="activity"></i></button></div></td></tr>${expanded ? renderManagedKeyRows(site, keys) : ''}`;
+    return `<tr class="data-row"><td><div class="upstream-name-cell"><button class="row-chevron ${expanded ? 'expanded' : ''}" type="button" data-toggle-key-site="${site.id}" aria-label="展开 ${escapeHtml(site.name)}"><i data-lucide="chevron-right"></i></button><div class="upstream-identity">${upstreamIdentityMarkup(site)}</div></div></td><td>${keys.length}</td><td class="healthy-text">${active}</td><td>${inactive}</td><td class="${failed ? 'danger-text' : ''}">${failed}</td><td>${timeText(site.last_sync_at)}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-import-keys="${site.id}" title="导入全部 Key"><i data-lucide="download"></i></button><button class="icon-btn" type="button" data-check-site-keys="${site.id}" title="检测全部 Key"><i data-lucide="activity"></i></button></div></td></tr>${expanded ? renderManagedKeyRows(site, keys) : ''}`;
   }).join('') || '<tr><td colspan="7"><div class="empty-state">没有匹配的上游或 Key</div></td></tr>';
 }
 
@@ -731,14 +764,62 @@ function renderOwnSites() {
   }).join('') || '<tr><td colspan="10"><div class="empty-state">还没有路由数据</div></td></tr>';
 }
 
+function rateBadgeTone(rate) {
+  if (rate === null || rate === undefined) return 'muted';
+  if (rate <= 0.05) return 'good';
+  if (rate <= 0.3) return 'normal';
+  return 'high';
+}
+
+function renderRateRows(group) {
+  const rates = group.rates || [];
+  if (!rates.length) return '<div class="rate-empty">暂无倍率数据</div>';
+  return `<div class="rate-detail-list">${rates.map((item) => {
+    const label = item.model ? `${item.scope || '通用'} · ${escapeHtml(item.model)}` : (item.scope ? escapeHtml(item.scope) : '通用');
+    return `<div class="rate-detail-line"><span class="muted">${label}</span><strong>×${numberText(item.rate)}</strong></div>`;
+  }).join('')}</div>`;
+}
+
+function renderRateGroups(site) {
+  const groups = site.groups || [];
+  if (!groups.length) return '<div class="expanded-panel"><div class="rate-empty">该上游暂无分组倍率，请先同步</div></div>';
+  return `<div class="expanded-panel"><div class="rate-group-grid">${groups.map((group) => {
+    const span = group.min_rate === group.max_rate ? `×${numberText(group.min_rate)}` : `×${numberText(group.min_rate)} ~ ×${numberText(group.max_rate)}`;
+    return `<div class="rate-group-card"><div class="rate-group-head"><span class="rate-group-name">${escapeHtml(group.group_name)}</span><span class="rate-badge ${rateBadgeTone(group.min_rate)}">${span}</span></div>${renderRateRows(group)}</div>`;
+  }).join('')}</div></div>`;
+}
+
 function renderPricing() {
   const keyword = state.search.toLowerCase();
-  const sections = [['OpenAI', state.pricing.openai || []], ['Claude', state.pricing.claude || []]];
-  document.querySelector('#pricingBoard').innerHTML = sections.map(([title, models]) => `<section class="pricing-section"><h3>${title}</h3>${models.filter((model) => !keyword || `${model.model_name} ${model.vendor}`.toLowerCase().includes(keyword)).map((model) => {
-    const official = Number(model.official_request_usd) ? `$${numberText(model.official_request_usd)} / 次` : `输入 $${numberText(model.official_input_usd_per_1m)} · 输出 $${numberText(model.official_output_usd_per_1m)}`;
-    return `<div class="model-row"><div class="model-row-head"><strong>${escapeHtml(model.model_name)}</strong><span class="muted">${official}</span></div><div class="model-price-list">${(model.upstreams || []).map((upstream) => `<div class="model-price-line"><span>${escapeHtml(upstream.upstream_name)}</span><strong>${upstream.upstream_request_usd != null ? `$${numberText(upstream.upstream_request_usd)} / 次` : `$${numberText(upstream.upstream_input_usd_per_1m)} / $${numberText(upstream.upstream_output_usd_per_1m)}`}</strong></div>`).join('') || '<span class="muted">暂无上游价格</span>'}</div></div>`;
-  }).join('') || '<div class="empty-state">暂无模型价格</div>'}</section>`).join('');
+  const sites = (state.groupRates || []).filter((site) => {
+    if (!keyword) return true;
+    const haystack = `${site.upstream_name} ${site.base_url} ${(site.groups || []).map((group) => group.group_name).join(' ')}`.toLowerCase();
+    return haystack.includes(keyword);
+  });
+  const board = document.querySelector('#pricingBoard');
+  if (!board) return;
+  const totalGroups = sites.reduce((sum, site) => sum + (site.group_count || 0), 0);
+  const rows = sites.map((site) => {
+    const expanded = state.expandedRateSites.has(site.upstream_site_id);
+    const span = site.min_rate === null ? '<span class="muted">无倍率</span>'
+      : `<span class="rate-badge ${rateBadgeTone(site.min_rate)}">×${numberText(site.min_rate)}${site.min_rate === site.max_rate ? '' : ` ~ ×${numberText(site.max_rate)}`}</span>`;
+    const link = site.base_url
+      ? `<a class="rate-site-link" href="${escapeHtml(site.base_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(site.upstream_name)}</a>`
+      : `<span class="rate-site-link plain">${escapeHtml(site.upstream_name)}</span>`;
+    return `<div class="rate-site ${expanded ? 'expanded' : ''}">
+      <div class="rate-site-head">
+        <button class="rate-site-toggle" type="button" data-toggle-rate-site="${site.upstream_site_id}" aria-expanded="${expanded}" aria-label="展开 ${escapeHtml(site.upstream_name)} 的分组倍率">
+          <span class="row-chevron ${expanded ? 'expanded' : ''}"><i data-lucide="chevron-right"></i></span>
+        </button>
+        <span class="rate-site-main">${link}<small class="muted">${site.group_count || 0} 个分组</small></span>
+        ${span}
+      </div>
+      ${expanded ? renderRateGroups(site) : ''}
+    </div>`;
+  }).join('');
+  board.innerHTML = `<div class="rate-board-summary"><span>${sites.length} 个上游 · ${totalGroups} 个分组</span></div>${rows || '<div class="empty-state">暂无上游分组倍率</div>'}`;
 }
+
 
 function alertStage(item) {
   if (item.status === 'resolved') return 'resolved';
@@ -1071,13 +1152,14 @@ async function openUsageDetail(usageId) {
 async function refreshAll({ quiet = false } = {}) {
   if (!quiet) setBusy(true);
   try {
-    const [monitoring, consumption, alerts, logs, rateChanges, pricing, ownSites, ownRoutes, runtimeSettings, systemUpdate] = await Promise.all([
+    const [monitoring, consumption, alerts, logs, rateChanges, pricing, groupRates, ownSites, ownRoutes, runtimeSettings, systemUpdate] = await Promise.all([
       api('/api/monitoring/upstreams'),
       api(`/api/monitoring/consumption?period=${encodeURIComponent(state.consumption.period)}`).catch((error) => ({ items: [], total_consumption: 0, error: error.message })),
       api('/api/alerts'),
       api('/api/sync-logs'),
       api('/api/rate-changes'),
       api('/api/model-pricing/board').catch(() => ({ openai: [], claude: [] })),
+      api('/api/group-rates/board').catch(() => ({ items: [] })),
       api('/api/own-sites').catch(() => ({ items: [] })),
       api('/api/own-site-routes').catch(() => ({ items: [] })),
       api('/api/settings/runtime'),
@@ -1089,6 +1171,7 @@ async function refreshAll({ quiet = false } = {}) {
     state.logs = logs.items || [];
     state.rateChanges = rateChanges.items || [];
     state.pricing = pricing;
+    state.groupRates = groupRates.items || [];
     state.ownSites = ownSites.items || [];
     state.ownRoutes = ownRoutes.items || [];
     state.runtimeSettings = runtimeSettings;
@@ -1192,7 +1275,8 @@ async function openDetail(siteId) {
     const site = detail.site;
     const snapshot = detail.snapshot || {};
     document.querySelector('#detailTitle').textContent = site.name;
-    document.querySelector('#detailSubtitle').textContent = site.base_url;
+    const username = typeof snapshot.username === 'string' ? snapshot.username.trim() : '';
+    document.querySelector('#detailSubtitle').innerHTML = `<a class="detail-site-link" href="${escapeHtml(site.base_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(site.base_url)}<i data-lucide="external-link"></i></a>${username ? `<span class="detail-username"><i data-lucide="user"></i>${escapeHtml(username)}</span>` : ''}`;
     const methods = Array.isArray(snapshot.payment_methods) ? snapshot.payment_methods.filter((item) => item?.available !== false) : [];
     document.querySelector('#detailContent').innerHTML = `
       <div class="detail-metrics"><div class="detail-metric"><span>余额</span><strong>${finiteNumberOrNull(snapshot.balance) === null ? '-' : `$${numberText(snapshot.balance)}`}</strong></div><div class="detail-metric"><span>今日 Token</span><strong>${tokenText(snapshot.today_tokens)}</strong></div><div class="detail-metric"><span>今日成本</span><strong>$${numberText(snapshot.today_cost)}</strong></div><div class="detail-metric"><span>OpenAI 倍率</span><strong>${rateText(snapshot.openai_rate)}</strong></div><div class="detail-metric"><span>Anthropic 倍率</span><strong>${rateText(snapshot.anthropic_rate)}</strong></div><div class="detail-metric"><span>Key</span><strong>${snapshot.key_count || 0}</strong></div></div>
@@ -1586,6 +1670,7 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.consumptionTable) { state.consumption.showTable = !state.consumption.showTable; renderConsumptionDashboard(); return; }
   if (target.dataset.toggleSite) { const id = Number(target.dataset.toggleSite); state.expandedSites.has(id) ? state.expandedSites.delete(id) : state.expandedSites.add(id); renderMonitoring(); refreshIcons(); return; }
   if (target.dataset.toggleKeySite) { const id = Number(target.dataset.toggleKeySite); state.expandedKeySites.has(id) ? state.expandedKeySites.delete(id) : state.expandedKeySites.add(id); renderGlobalKeys(); refreshIcons(); return; }
+  if (target.dataset.toggleRateSite) { const id = Number(target.dataset.toggleRateSite); state.expandedRateSites.has(id) ? state.expandedRateSites.delete(id) : state.expandedRateSites.add(id); renderPricing(); refreshIcons(); return; }
   if (target.dataset.detailSite) return openDetail(Number(target.dataset.detailSite));
   if (target.dataset.usageDetail) return openUsageDetail(target.dataset.usageDetail);
   if (target.dataset.editFromDetail) { closeDialog('detailDialog'); return openUpstreamDialog(Number(target.dataset.editFromDetail)); }

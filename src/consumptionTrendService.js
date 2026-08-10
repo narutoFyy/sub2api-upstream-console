@@ -2,9 +2,9 @@ const repo = require('./repository');
 const { finiteNumberOrNull } = require('./utils');
 
 const PERIODS = {
-  '24h': { duration_ms: 24 * 60 * 60 * 1000, bucket_ms: 60 * 60 * 1000 },
-  '7d': { duration_ms: 7 * 24 * 60 * 60 * 1000, bucket_ms: 6 * 60 * 60 * 1000 },
-  '30d': { duration_ms: 30 * 24 * 60 * 60 * 1000, bucket_ms: 24 * 60 * 60 * 1000 }
+  '24h': { duration_ms: 24 * 60 * 60 * 1000, bucket_ms: 60 * 60 * 1000, half_life_ms: 6 * 60 * 60 * 1000 },
+  '7d': { duration_ms: 7 * 24 * 60 * 60 * 1000, bucket_ms: 6 * 60 * 60 * 1000, half_life_ms: 36 * 60 * 60 * 1000 },
+  '30d': { duration_ms: 30 * 24 * 60 * 60 * 1000, bucket_ms: 24 * 60 * 60 * 1000, half_life_ms: 7 * 24 * 60 * 60 * 1000 }
 };
 
 function normalizePeriod(value) {
@@ -31,6 +31,37 @@ function normalizeSamples(samples, sinceMs, nowMs) {
 
 function bucketIndex(timestampMs, sinceMs, bucketMs, bucketCount) {
   return Math.min(bucketCount - 1, Math.max(0, Math.floor((timestampMs - sinceMs) / bucketMs)));
+}
+
+function intervalConsumption(previous, current, source) {
+  if (source === 'actual_cost') {
+    if (previous.total_cost === null || current.total_cost === null) return null;
+    const delta = current.total_cost - previous.total_cost;
+    return delta < 0 ? null : delta;
+  }
+  if (previous.balance === null || current.balance === null) return null;
+  const delta = previous.balance - current.balance;
+  return delta < 0 ? null : delta;
+}
+
+function recentRatePerHour(samples, source, nowMs, halfLifeMs) {
+  let weightedConsumption = 0;
+  let weightedHours = 0;
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1];
+    const current = samples[index];
+    const durationMs = current.timestamp_ms - previous.timestamp_ms;
+    if (durationMs <= 0) continue;
+    const delta = intervalConsumption(previous, current, source);
+    if (delta === null) continue;
+    const weight = Math.pow(0.5, Math.max(0, nowMs - current.timestamp_ms) / halfLifeMs);
+    if (!Number.isFinite(weight) || weight <= 0) continue;
+    weightedConsumption += delta * weight;
+    weightedHours += (durationMs / (60 * 60 * 1000)) * weight;
+  }
+  if (weightedHours <= 0) return null;
+  const rate = weightedConsumption / weightedHours;
+  return Number.isFinite(rate) ? rate : null;
 }
 
 function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now = Date.now()) {
@@ -100,9 +131,13 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
   const enoughData = normalized.length >= 2 && coverageMs >= 60 * 60 * 1000;
   const consumption = source === 'actual_cost' ? costConsumption : balanceConsumption;
   const averagePerHour = enoughData && coverageMs > 0 ? consumption / (coverageMs / (60 * 60 * 1000)) : null;
+  const recentPerHour = enoughData
+    ? recentRatePerHour(normalized, source, nowMs, definition.half_life_ms)
+    : null;
+  const runwayPerHour = recentPerHour !== null && recentPerHour > 0 ? recentPerHour : averagePerHour;
   const currentBalance = finiteNumberOrNull(currentSnapshot?.balance) ?? last?.balance ?? null;
-  const runwayHours = averagePerHour !== null && averagePerHour > 0 && currentBalance !== null && currentBalance >= 0
-    ? currentBalance / averagePerHour
+  const runwayHours = runwayPerHour !== null && runwayPerHour > 0 && currentBalance !== null && currentBalance >= 0
+    ? currentBalance / runwayPerHour
     : null;
 
   return {
@@ -122,6 +157,8 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
     consumption,
     average_per_hour: averagePerHour,
     average_per_day: averagePerHour === null ? null : averagePerHour * 24,
+    recent_per_hour: recentPerHour,
+    runway_per_hour: runwayPerHour,
     runway_hours: runwayHours,
     buckets
   };

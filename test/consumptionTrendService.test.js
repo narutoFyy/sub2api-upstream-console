@@ -36,8 +36,51 @@ test('consumption uses positive cumulative cost deltas and ignores resets and re
   assert.equal(result.consumption, 5);
   assert.equal(result.coverage_ms, 3 * 60 * 60 * 1000);
   assert.equal(result.average_per_hour, 5 / 3);
-  assert.equal(result.runway_hours, 116 / (5 / 3));
+  assert.equal(result.runway_hours, 116 / result.runway_per_hour);
   assert.equal(result.buckets.reduce((total, item) => total + item.consumption, 0), 5);
+});
+
+test('runway weights recent intervals above older ones', () => {
+  const steady = summarizeConsumption([
+    sample(4, 40, 0), sample(3, 30, 10), sample(2, 20, 20), sample(1, 10, 30)
+  ], { balance: 10 }, '24h', NOW);
+
+  const accelerating = summarizeConsumption([
+    sample(4, 40, 0), sample(3, 38, 2), sample(2, 34, 6), sample(1, 10, 30)
+  ], { balance: 10 }, '24h', NOW);
+
+  assert.equal(steady.consumption, 30);
+  assert.equal(accelerating.consumption, 30);
+  assert.equal(steady.average_per_hour, accelerating.average_per_hour);
+  assert.ok(accelerating.recent_per_hour > accelerating.average_per_hour);
+  assert.ok(accelerating.runway_hours < steady.runway_hours);
+});
+
+test('runway excludes intervals with no usable reading from the denominator', () => {
+  const gapped = summarizeConsumption([
+    sample(6, 100, 0),
+    sample(5, 94, 0),
+    sample(3, null, 0),
+    sample(2, null, 0),
+    sample(1, 88, 0)
+  ], { balance: 88 }, '24h', NOW);
+
+  assert.equal(gapped.consumption, 6);
+  assert.equal(gapped.average_per_hour, 6 / 5);
+  assert.equal(gapped.recent_per_hour, 6);
+  assert.equal(gapped.runway_per_hour, 6);
+  assert.equal(gapped.runway_hours, 88 / 6);
+});
+
+test('runway falls back to the window average when no interval carries weight', () => {
+  const result = summarizeConsumption([
+    sample(4, 100, null), sample(2, 100, null), sample(1, 100, null)
+  ], { balance: 100 }, '24h', NOW);
+
+  assert.equal(result.consumption, 0);
+  assert.equal(result.recent_per_hour, null);
+  assert.equal(result.runway_per_hour, 0);
+  assert.equal(result.runway_hours, null);
 });
 
 test('balance decline is an explicit estimate when cumulative cost is unavailable', () => {
@@ -79,6 +122,7 @@ test('speed and runway are withheld for sparse coverage', () => {
   assert.equal(result.enough_data, false);
   assert.equal(result.consumption, 1);
   assert.equal(result.average_per_hour, null);
+  assert.equal(result.recent_per_hour, null);
   assert.equal(result.runway_hours, null);
 });
 
