@@ -18,6 +18,9 @@ module.exports = {
   adminPassword: process.env.ADMIN_PASSWORD || '',
   sessionCookieName: 'sub2api_console_session',
   sessionSecret: process.env.SESSION_SECRET || process.env.APP_SECRET || 'dev-session-only-change-me',
+  sessionMaxAgeSeconds: Number.isFinite(Number(process.env.SESSION_MAX_AGE_SECONDS)) && Number(process.env.SESSION_MAX_AGE_SECONDS) > 0
+    ? Math.floor(Number(process.env.SESSION_MAX_AGE_SECONDS))
+    : 30 * 24 * 60 * 60,
   syncSchedulerEnabled: process.env.SYNC_SCHEDULER_ENABLED !== 'false',
   syncSchedulerTickSeconds: Number(process.env.SYNC_SCHEDULER_TICK_SECONDS || 30),
   keyCheckSchedulerEnabled: process.env.KEY_CHECK_SCHEDULER_ENABLED !== 'false',

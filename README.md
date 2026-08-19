@@ -182,6 +182,7 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 | `APP_SECRET` | `dev-only-change-me` | 上游凭证加密密钥，生产环境必须更换 |
 | `ADMIN_PASSWORD` | 空 | 控制台登录密码；为空时本地开发免登录 |
 | `SESSION_SECRET` | 复用 `APP_SECRET` | 登录 Cookie 签名密钥 |
+| `SESSION_MAX_AGE_SECONDS` | `2592000`（30 天） | 控制台登录状态保持时间；退出登录仍会立即失效 |
 | `SYNC_SCHEDULER_ENABLED` | `true` | 是否启用后台定时同步 |
 | `SYNC_SCHEDULER_TICK_SECONDS` | `30` | 后台同步扫描间隔 |
 | `KEY_CHECK_SCHEDULER_ENABLED` | `true` | 是否启用 Key 后台联通检测 |

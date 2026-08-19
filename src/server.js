@@ -353,7 +353,7 @@ app.post('/api/login', (req, res) => {
   if (req.body?.password !== config.adminPassword) {
     return res.status(401).json({ error: '控制台密码错误' });
   }
-  res.setHeader('Set-Cookie', `${config.sessionCookieName}=${encodeURIComponent(makeSessionCookie())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`);
+  res.setHeader('Set-Cookie', `${config.sessionCookieName}=${encodeURIComponent(makeSessionCookie())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${config.sessionMaxAgeSeconds}`);
   return res.json({ ok: true, auth_enabled: true });
 });
 
