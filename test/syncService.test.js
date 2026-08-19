@@ -73,6 +73,39 @@ test('confirmed zero balance is persisted and evaluated once', async () => {
   assert.equal(alerts, 1);
 });
 
+test('a temporary daily-usage fallback is retried before it can overwrite cumulative counters', async () => {
+  const repository = fakeRepository();
+  repository.getSnapshot = () => ({ total_requests: 109903, total_tokens: 13444471368, total_cost: 14950.6060154877 });
+  const bad = state(1547.86041668, 'fresh-token');
+  bad.snapshot = {
+    ...bad.snapshot,
+    total_requests: 3156,
+    total_tokens: 495791580,
+    total_cost: 265.940802206
+  };
+  const good = state(1542.42931913, 'confirmed-token');
+  good.snapshot = {
+    ...good.snapshot,
+    total_requests: 110086,
+    total_tokens: 13472679776,
+    total_cost: 14974.8308233677
+  };
+  const responses = [bad, good];
+  const delays = [];
+
+  const result = await syncSite(1, {
+    repo: repository,
+    settings: {},
+    fetchUpstreamState: async () => responses.shift(),
+    delay: async (ms) => delays.push(ms),
+    evaluateAlerts: async () => {}
+  });
+
+  assert.equal(result.snapshot.total_cost, 14974.8308233677);
+  assert.deepEqual(delays, [5000]);
+  assert.deepEqual(repository.events, ['tokens', 'save:1542.42931913', 'log:success:']);
+});
+
 test('failed zero-balance confirmation preserves the previous snapshot and records a sync failure', async () => {
   const repository = fakeRepository();
   let calls = 0;

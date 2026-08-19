@@ -33,15 +33,33 @@ function bucketIndex(timestampMs, sinceMs, bucketMs, bucketCount) {
   return Math.min(bucketCount - 1, Math.max(0, Math.floor((timestampMs - sinceMs) / bucketMs)));
 }
 
-function intervalConsumption(previous, current, source) {
-  if (source === 'actual_cost') {
-    if (previous.total_cost === null || current.total_cost === null) return null;
-    const delta = current.total_cost - previous.total_cost;
-    return delta < 0 ? null : delta;
-  }
+function balanceConsumptionDelta(previous, current) {
   if (previous.balance === null || current.balance === null) return null;
   const delta = previous.balance - current.balance;
   return delta < 0 ? null : delta;
+}
+
+function costConsumptionDelta(previous, current) {
+  if (previous.total_cost === null || current.total_cost === null) return null;
+  const delta = current.total_cost - previous.total_cost;
+  return delta < 0 ? null : delta;
+}
+
+function isCumulativeCostSpike(costDelta, balanceDelta) {
+  return costDelta !== null
+    && balanceDelta !== null
+    && costDelta > 100
+    && costDelta > balanceDelta * 10;
+}
+
+function intervalConsumption(previous, current, source) {
+  const balanceDelta = balanceConsumptionDelta(previous, current);
+  if (source === 'actual_cost') {
+    const costDelta = costConsumptionDelta(previous, current);
+    if (costDelta === null) return null;
+    return isCumulativeCostSpike(costDelta, balanceDelta) ? balanceDelta : costDelta;
+  }
+  return balanceDelta;
 }
 
 function recentRatePerHour(samples, source, nowMs, halfLifeMs) {
@@ -76,6 +94,7 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
     ended_at: new Date(Math.min(nowMs, sinceMs + (index + 1) * definition.bucket_ms)).toISOString(),
     cost_consumption: 0,
     balance_consumption: 0,
+    fallback_consumption: 0,
     recharge: 0,
     sample_count: 0,
     balance: null
@@ -91,21 +110,23 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
     if (current.balance !== null) target.balance = current.balance;
     if (index === 0) continue;
     const previous = normalized[index - 1];
-    if (previous.total_cost !== null && current.total_cost !== null) {
-      const delta = current.total_cost - previous.total_cost;
-      if (delta > 0) {
-        costConsumption += delta;
-        target.cost_consumption += delta;
-      }
+    const balanceDelta = balanceConsumptionDelta(previous, current);
+    const costDelta = costConsumptionDelta(previous, current);
+    if (costDelta !== null && costDelta > 0 && !isCumulativeCostSpike(costDelta, balanceDelta)) {
+      costConsumption += costDelta;
+      target.cost_consumption += costDelta;
+    } else if (balanceDelta !== null && (costDelta === null || costDelta < 0 || isCumulativeCostSpike(costDelta, balanceDelta))) {
+      target.fallback_consumption += balanceDelta;
+    }
+    if (balanceDelta !== null) {
+      balanceConsumption += balanceDelta;
+      target.balance_consumption += balanceDelta;
     }
     if (previous.balance !== null && current.balance !== null) {
-      const delta = previous.balance - current.balance;
-      if (delta > 0) {
-        balanceConsumption += delta;
-        target.balance_consumption += delta;
-      } else if (delta < 0) {
-        recharge += -delta;
-        target.recharge += -delta;
+      const balanceChange = previous.balance - current.balance;
+      if (balanceChange < 0) {
+        recharge += -balanceChange;
+        target.recharge += -balanceChange;
       }
     }
   }
@@ -120,16 +141,19 @@ function summarizeConsumption(samples, currentSnapshot, periodValue = '24h', now
 
   const source = costConsumption > 0 || balanceConsumption === 0 ? 'actual_cost' : 'balance_estimate';
   for (const bucket of buckets) {
-    bucket.consumption = source === 'actual_cost' ? bucket.cost_consumption : bucket.balance_consumption;
+    bucket.consumption = source === 'actual_cost'
+      ? bucket.cost_consumption + bucket.fallback_consumption
+      : bucket.balance_consumption;
     delete bucket.cost_consumption;
     delete bucket.balance_consumption;
+    delete bucket.fallback_consumption;
   }
 
   const first = normalized[0] || null;
   const last = normalized.at(-1) || null;
   const coverageMs = first && last ? Math.max(0, last.timestamp_ms - first.timestamp_ms) : 0;
   const enoughData = normalized.length >= 2 && coverageMs >= 60 * 60 * 1000;
-  const consumption = source === 'actual_cost' ? costConsumption : balanceConsumption;
+  const consumption = buckets.reduce((total, bucket) => total + bucket.consumption, 0);
   const averagePerHour = enoughData && coverageMs > 0 ? consumption / (coverageMs / (60 * 60 * 1000)) : null;
   const recentPerHour = enoughData
     ? recentRatePerHour(normalized, source, nowMs, definition.half_life_ms)

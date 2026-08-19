@@ -40,6 +40,19 @@ test('consumption uses positive cumulative cost deltas and ignores resets and re
   assert.equal(result.buckets.reduce((total, item) => total + item.consumption, 0), 5);
 });
 
+test('consumption ignores a temporary fallback from cumulative usage to daily usage', () => {
+  const result = summarizeConsumption([
+    sample(4, 100, 14950.6060154877),
+    sample(3, 81.20628943, 265.940802206),
+    sample(2, 75.77519188, 14974.8308233677),
+    sample(1, 67.29350162, 14983.3125136252)
+  ], { balance: 67.29350162 }, '24h', NOW);
+
+  assert.equal(result.source, 'actual_cost');
+  assert.equal(result.consumption, 32.70649837750031);
+  assert.ok(result.consumption < 100);
+});
+
 test('runway weights recent intervals above older ones', () => {
   const steady = summarizeConsumption([
     sample(4, 40, 0), sample(3, 30, 10), sample(2, 20, 20), sample(1, 10, 30)

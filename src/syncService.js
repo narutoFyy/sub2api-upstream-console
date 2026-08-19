@@ -24,11 +24,26 @@ function fetchArguments(site, credentials, tokenOverride = '') {
   };
 }
 
+function hasCumulativeUsageRegression(snapshot, previousSnapshot) {
+  if (!snapshot || !previousSnapshot) return false;
+  const fields = ['total_requests', 'total_tokens', 'total_cost'];
+  let regressions = 0;
+  for (const field of fields) {
+    const current = finiteNumberOrNull(snapshot[field]);
+    const previous = finiteNumberOrNull(previousSnapshot[field]);
+    if (current === null || previous === null || previous <= 0) continue;
+    if (current < previous * 0.5) regressions += 1;
+  }
+  return regressions >= 2;
+}
+
 async function fetchConfirmedState(site, credentials, dependencies = {}) {
   const fetchState = dependencies.fetchUpstreamState || fetchSub2APIState;
+  const previousSnapshot = dependencies.previousSnapshot || dependencies.repo?.getSnapshot?.(site.id) || null;
   const first = await fetchState(fetchArguments(site, credentials));
   const firstBalance = finiteNumberOrNull(first?.snapshot?.balance);
-  if (firstBalance !== null && firstBalance !== 0) return first;
+  const firstUsageRegressed = hasCumulativeUsageRegression(first?.snapshot, previousSnapshot);
+  if (firstBalance !== null && firstBalance !== 0 && !firstUsageRegressed) return first;
 
   const delay = dependencies.delay || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   await delay(Number(dependencies.zeroBalanceRetryDelayMs ?? 5000));
@@ -36,16 +51,19 @@ async function fetchConfirmedState(site, credentials, dependencies = {}) {
   try {
     second = await fetchState(fetchArguments(site, credentials, first.token));
   } catch (error) {
-    const firstResult = firstBalance === 0 ? '首次返回 0' : '首次缺失';
+    const firstResult = firstUsageRegressed ? '累计用量异常回退' : firstBalance === 0 ? '首次返回 0' : '首次缺失';
     const retryError = new Error(`余额${firstResult}，复查失败，已保留上一有效余额：${error.message}`);
     retryError.cause = error;
     throw retryError;
   }
 
   const secondBalance = finiteNumberOrNull(second?.snapshot?.balance);
-  if (secondBalance === null || (firstBalance === null && secondBalance === 0)) {
-    const firstResult = firstBalance === 0 ? '首次返回 0' : '首次缺失';
-    const secondResult = secondBalance === null ? '复查仍未返回有效数值' : '复查仅返回一次 0';
+  const secondUsageRegressed = hasCumulativeUsageRegression(second?.snapshot, previousSnapshot);
+  if (secondUsageRegressed || secondBalance === null || (firstBalance === null && secondBalance === 0)) {
+    const firstResult = firstUsageRegressed ? '累计用量异常回退' : firstBalance === 0 ? '首次返回 0' : '首次缺失';
+    const secondResult = secondUsageRegressed
+      ? '复查仍返回异常累计用量'
+      : secondBalance === null ? '复查仍未返回有效数值' : '复查仅返回一次 0';
     throw new Error(`余额${firstResult}，${secondResult}，已保留上一有效余额`);
   }
   return second;
@@ -93,13 +111,17 @@ async function syncSite(siteId, dependencies = {}) {
     }).catch((error) => {
       console.error(`Rate increase notification failed for upstream ${siteId}:`, error.message);
     });
-    (dependencies.notifyRateDecreases || notifyRateDecreases)(siteId, {
-      ...dependencies,
-      settings,
-      repo: repository
-    }).catch((error) => {
-      console.error(`Rate decrease notification failed for upstream ${siteId}:`, error.message);
-    });
+    const notifyDecrease = dependencies.notifyRateDecreases
+      || (typeof notifyRateDecreases === 'function' ? notifyRateDecreases : null);
+    if (notifyDecrease) {
+      notifyDecrease(siteId, {
+        ...dependencies,
+        settings,
+        repo: repository
+      }).catch((error) => {
+        console.error(`Rate decrease notification failed for upstream ${siteId}:`, error.message);
+      });
+    }
     return result;
   } catch (err) {
     repository.saveSyncLog(siteId, 'full', startedAt, 'failed', err);
@@ -156,6 +178,7 @@ async function syncDueSites(dependencies = {}) {
 }
 
 module.exports = {
+  hasCumulativeUsageRegression,
   fetchConfirmedState,
   syncSite,
   syncAllSites,
