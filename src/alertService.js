@@ -15,6 +15,32 @@ function keyStatusLabel(status, errorCode = '') {
   }[status] || status || '未知错误';
 }
 
+function formatBeijingTime(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || '未知');
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(date).reduce((result, part) => ({ ...result, [part.type]: part.value }), {});
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function localizeAlertError(value) {
+  const message = String(value || '').trim();
+  if (!message) return '未知';
+  return message
+    .replace(/^Unable to discover upstream API endpoint:\s*/i, '无法发现上游 API 地址：')
+    .replace(/The operation was aborted due to timeout\.?/gi, '请求超时')
+    .replace(/^fetch failed$/i, '请求上游接口失败')
+    .replace(/^Base URL resolved to a private network address$/i, '上游地址解析到了内网地址');
+}
+
 function alertSettings(dependencies = {}) {
   const repository = dependencies.repo || repo;
   let settings = dependencies.settings;
@@ -203,7 +229,7 @@ async function evaluateKeyConnectivity(site, key, state, dependencies = {}) {
         state.model ? `检测模型：${state.model}` : '',
         state.error_message ? `原因：${state.error_message}` : '',
         `连续失败：${state.consecutive_failures} 次`,
-        `时间：${state.last_checked_at || new Date().toISOString()}`
+        `时间：${formatBeijingTime(state.last_checked_at || new Date())}`
       ].filter(Boolean).join('\n')
     }, { ...dependencies, settings });
   }
@@ -216,7 +242,7 @@ async function evaluateKeyConnectivity(site, key, state, dependencies = {}) {
       upstream_site_id: site.id,
       upstream_name: site.name,
       title: `[上游恢复] ${site.name} · ${key.name || masked}`,
-      message: `上游：${site.name}\nKey：${masked}\n状态：已恢复联通\n耗时：${state.latency_ms ?? '-'}ms\n时间：${state.last_checked_at || new Date().toISOString()}`
+      message: `上游：${site.name}\nKey：${masked}\n状态：已恢复联通\n耗时：${state.latency_ms ?? '-'}ms\n时间：${formatBeijingTime(state.last_checked_at || new Date())}`
     }, { ...dependencies, settings });
   }
   return null;
@@ -232,7 +258,7 @@ function rateChangeMessage(site, entries, direction) {
       : '';
     return `· ${entry.group_name || entry.group_id || '未命名分组'}：${entry.old_rate} → ${entry.new_rate}${percentText}${keyText}`;
   });
-  return `上游：${site.name}\n检测到分组倍率${direction}：\n${lines.join('\n')}\n时间：${new Date().toISOString()}`;
+  return `上游：${site.name}\n检测到分组倍率${direction}：\n${lines.join('\n')}\n时间：${formatBeijingTime()}`;
 }
 
 async function notifyRateChanges(siteId, direction, dependencies = {}) {
@@ -310,7 +336,7 @@ async function evaluateSiteAlerts(siteId, dependencies = {}) {
       upstream_site_id: site.id,
       upstream_name: site.name,
       title: `[余额预警] ${site.name}`,
-      message: `上游：${site.name}\n当前余额：${balance}\n预警阈值：${threshold}\n时间：${site.last_sync_at || new Date().toISOString()}`
+      message: `上游：${site.name}\n当前余额：${balance}\n预警阈值：${threshold}\n时间：${formatBeijingTime(site.last_sync_at || new Date())}`
     }, { ...dependencies, settings, deferNotification: true }));
   } else if (balance !== null && balance >= threshold) {
     results.push(await resolveAndNotify(lowBalanceFingerprint, {
@@ -334,7 +360,7 @@ async function evaluateSiteAlerts(siteId, dependencies = {}) {
       upstream_site_id: site.id,
       upstream_name: site.name,
       title: `[同步失败] ${site.name}`,
-      message: `上游：${site.name}\n连续失败：${site.sync_failure_count} 次\n原因：${site.last_sync_error || '未知'}\n时间：${new Date().toISOString()}`
+      message: `上游：${site.name}\n连续失败：${site.sync_failure_count} 次\n原因：${localizeAlertError(site.last_sync_error)}\n时间：${formatBeijingTime()}`
     }, { ...dependencies, settings, deferNotification: true }));
   } else if (site.status === 'active' && Number(site.sync_success_count || 0) >= settings.alert_recovery_threshold) {
     results.push(await resolveAndNotify(syncFingerprint, {
@@ -344,7 +370,7 @@ async function evaluateSiteAlerts(siteId, dependencies = {}) {
       upstream_site_id: site.id,
       upstream_name: site.name,
       title: `[同步恢复] ${site.name}`,
-      message: `上游：${site.name}\n状态：同步已恢复\n时间：${site.last_sync_at || new Date().toISOString()}`
+      message: `上游：${site.name}\n状态：同步已恢复\n时间：${formatBeijingTime(site.last_sync_at || new Date())}`
     }, { ...dependencies, settings, deferNotification: true }));
   }
 
@@ -356,6 +382,8 @@ async function evaluateSiteAlerts(siteId, dependencies = {}) {
 module.exports = {
   KEY_FAILURE_STATES,
   keyStatusLabel,
+  formatBeijingTime,
+  localizeAlertError,
   alertSettings,
   isQuietHours,
   eventDeliveryEnabled,

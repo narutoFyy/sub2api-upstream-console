@@ -7,10 +7,20 @@ const {
   evaluateKeyConnectivity,
   evaluateSiteAlerts,
   deliverAlertNotifications,
+  formatBeijingTime,
   isQuietHours,
+  localizeAlertError,
   notifyRateIncreases,
   notifyRateDecreases
 } = require('../src/alertService');
+
+test('alert times use Beijing time and discovery timeouts are localized', () => {
+  assert.equal(formatBeijingTime('2026-08-21T14:18:04.936Z'), '2026-08-21 22:18:04');
+  assert.equal(
+    localizeAlertError('Unable to discover upstream API endpoint: The operation was aborted due to timeout'),
+    '无法发现上游 API 地址：请求超时'
+  );
+});
 
 function alertRepository() {
   const alerts = [];
