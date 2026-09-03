@@ -6,6 +6,7 @@ const {
   extractBalance,
   extractDiscoveredBaseUrl,
   fetchNewAPIState,
+  fetchSub2APIState,
   newAPIQuotaDisplay,
   normalizeNewAPIRates,
   normalizeNewAPITokens,
@@ -150,6 +151,61 @@ test('Sub2API balance accepts only explicit balance fields', () => {
   assert.equal(extractBalance({ balance: 7.25, quota: 94.28, credit: 88 }), 7.25);
   assert.equal(extractBalance({ balance: null, user_balance: '7.5', quota: 94.28 }), 7.5);
   assert.equal(extractBalance({ balance: '', user_balance: undefined, quota: 94.28, credit: 88 }), null);
+});
+
+test('expired Sub2API tokens fall back to password login after a rejected refresh token', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options) => {
+    const parsed = new URL(String(url));
+    calls.push({ path: parsed.pathname, options });
+    if (parsed.pathname === '/api/v1/auth/refresh') {
+      return {
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        text: async () => JSON.stringify({ code: 401, message: 'invalid refresh token' })
+      };
+    }
+    if (parsed.pathname === '/api/v1/auth/login') {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: async () => JSON.stringify({
+          code: 0,
+          data: { access_token: 'access-from-password', refresh_token: 'refresh-from-password', expires_in: 3600 }
+        })
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: async () => JSON.stringify({ code: 0, data: {} })
+    };
+  };
+  try {
+    const state = await fetchSub2APIState({
+      baseUrl: 'https://1.1.1.1',
+      upstreamType: 'sub2api',
+      email: 'fixture@example.com',
+      password: 'fixture-password',
+      token: 'expired-access',
+      refreshToken: 'revoked-refresh',
+      tokenExpiresAt: '2020-01-01T00:00:00.000Z'
+    });
+    assert.equal(state.token, 'access-from-password');
+    assert.equal(state.refresh_token, 'refresh-from-password');
+    assert.equal(state.login.login_path, '/auth/login');
+    assert.deepEqual(JSON.parse(calls.find((item) => item.path === '/api/v1/auth/login').options.body), {
+      email: 'fixture@example.com',
+      password: 'fixture-password'
+    });
+    assert.ok(calls.findIndex((item) => item.path === '/api/v1/auth/refresh') < calls.findIndex((item) => item.path === '/api/v1/auth/login'));
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test('access token refresh uses the Sub2API refresh contract', async () => {

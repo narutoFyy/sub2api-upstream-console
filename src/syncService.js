@@ -151,6 +151,17 @@ async function syncAllSites(dependencies = {}) {
   return results;
 }
 
+function startSiteSync(siteId, dependencies = {}) {
+  const runSync = dependencies.sync || syncSite;
+  const onError = dependencies.onError || console.error;
+  return Promise.resolve()
+    .then(() => runSync(siteId))
+    .catch((error) => {
+      onError(`Post upstream-create sync failed for upstream ${siteId}:`, error.message);
+      return null;
+    });
+}
+
 function shouldSyncSite(site, now = Date.now(), defaultIntervalSeconds = 180) {
   if (site.status === 'disabled' || Number(site.sync_enabled ?? 1) === 0) return false;
   if (!site.last_sync_at) return true;
@@ -181,6 +192,7 @@ module.exports = {
   hasCumulativeUsageRegression,
   fetchConfirmedState,
   syncSite,
+  startSiteSync,
   syncAllSites,
   syncDueSites,
   shouldSyncSite

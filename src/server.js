@@ -6,7 +6,7 @@ const { z } = require('zod');
 const config = require('./config');
 const repo = require('./repository');
 const { seedFromEnv } = require('./seed');
-const { syncSite, syncAllSites } = require('./syncService');
+const { syncSite, startSiteSync, syncAllSites } = require('./syncService');
 const { createPaymentOrder, fetchSub2APIState, getPaymentOrder } = require('./upstreamClient');
 const { fetchOwnSiteRoutes } = require('./ownSiteClient');
 const { importAllKeys } = require('./keyImportService');
@@ -459,7 +459,9 @@ app.get('/api/upstreams', (req, res) => {
 app.post('/api/upstreams', (req, res, next) => {
   try {
     const payload = siteSchema.parse(sanitizeSitePayload(req.body));
-    res.status(201).json(repo.createSite(payload));
+    const site = repo.createSite(payload);
+    startSiteSync(site.id);
+    res.status(201).json(site);
   } catch (err) {
     next(err);
   }

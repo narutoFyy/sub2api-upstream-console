@@ -5,7 +5,7 @@ process.env.APP_SECRET = 'sync-service-test-secret';
 process.env.SYNC_SCHEDULER_ENABLED = 'false';
 process.env.KEY_CHECK_SCHEDULER_ENABLED = 'false';
 
-const { syncSite } = require('../src/syncService');
+const { syncSite, startSiteSync } = require('../src/syncService');
 
 function state(balance, token = 'token') {
   return {
@@ -30,6 +30,24 @@ function fakeRepository() {
     saveSyncLog: (siteId, type, startedAt, status, error) => events.push(`log:${status}:${error?.message || ''}`)
   };
 }
+
+test('new upstream sync starts in the background and reports failures', async () => {
+  const events = [];
+  const pending = startSiteSync(7, {
+    sync: async (siteId) => {
+      events.push(`started:${siteId}`);
+      throw new Error('upstream unavailable');
+    },
+    onError: (...args) => events.push(args)
+  });
+
+  assert.deepEqual(events, []);
+  await pending;
+  assert.deepEqual(events, [
+    'started:7',
+    ['Post upstream-create sync failed for upstream 7:', 'upstream unavailable']
+  ]);
+});
 
 test('transient zero balance is replaced by the confirmed normal response before persistence', async () => {
   const repository = fakeRepository();

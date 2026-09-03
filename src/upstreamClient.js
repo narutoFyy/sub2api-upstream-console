@@ -929,10 +929,19 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, re
   let activeTokenExpiresAt = tokenExpiresAt || tokenExpiryIso(token);
   let login = null;
   if (activeRefreshToken && tokenNeedsRefresh(activeToken, activeTokenExpiresAt)) {
-    const refreshed = await refreshAccessToken(baseUrl, activeRefreshToken);
-    activeToken = refreshed.token;
-    activeRefreshToken = refreshed.refresh_token;
-    activeTokenExpiresAt = refreshed.token_expires_at;
+    try {
+      const refreshed = await refreshAccessToken(baseUrl, activeRefreshToken);
+      activeToken = refreshed.token;
+      activeRefreshToken = refreshed.refresh_token;
+      activeTokenExpiresAt = refreshed.token_expires_at;
+    } catch (error) {
+      // A refresh token can be revoked independently of the account password.
+      if (!email || !password || error?.status !== 401) throw error;
+      login = await loginWithPassword(baseUrl, email, password);
+      activeToken = login.token;
+      activeRefreshToken = login.refresh_token;
+      activeTokenExpiresAt = login.token_expires_at;
+    }
   }
   if (!activeToken) {
     login = await loginWithPassword(baseUrl, email, password);
