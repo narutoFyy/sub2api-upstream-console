@@ -20,7 +20,8 @@ function fetchArguments(site, credentials, tokenOverride = '') {
     password: credentials.password,
     token: tokenOverride || credentials.token,
     refreshToken: credentials.refresh_token,
-    tokenExpiresAt: credentials.token_expires_at
+    tokenExpiresAt: credentials.token_expires_at,
+    sessionCookie: credentials.session_cookie
   };
 }
 
@@ -83,7 +84,8 @@ async function syncSite(siteId, dependencies = {}) {
     repository.saveCredentialTokens(siteId, {
       token: result.token,
       refresh_token: result.refresh_token,
-      token_expires_at: result.token_expires_at
+      token_expires_at: result.token_expires_at,
+      session_cookie: result.session_cookie
     });
     repository.saveSyncSuccess(siteId, result, {
       maxSyncLogs: settings.max_sync_logs,
@@ -162,11 +164,27 @@ function startSiteSync(siteId, dependencies = {}) {
     });
 }
 
+function syncBackoffSeconds(site, defaultIntervalSeconds = 180) {
+  const base = Number(site.sync_interval_seconds || defaultIntervalSeconds) || 180;
+  const failures = Number(site.sync_failure_count || 0);
+  if (failures <= 0) return base;
+  const multiplier = 2 ** Math.min(failures, 8);
+  return Math.min(base * multiplier, 6 * 60 * 60);
+}
+
+function lastSyncAttemptAt(site) {
+  if (site.last_sync_attempt_at) return site.last_sync_attempt_at;
+  if (Number(site.sync_failure_count || 0) > 0) return site.updated_at || site.last_sync_at || '';
+  return site.last_sync_at || '';
+}
+
 function shouldSyncSite(site, now = Date.now(), defaultIntervalSeconds = 180) {
   if (site.status === 'disabled' || Number(site.sync_enabled ?? 1) === 0) return false;
-  if (!site.last_sync_at) return true;
-  const intervalMs = Number(site.sync_interval_seconds || defaultIntervalSeconds) * 1000;
-  return now - new Date(site.last_sync_at).getTime() >= intervalMs;
+  const lastAttempt = lastSyncAttemptAt(site);
+  if (!lastAttempt) return true;
+  const timestamp = new Date(lastAttempt).getTime();
+  if (!Number.isFinite(timestamp)) return true;
+  return now - timestamp >= syncBackoffSeconds(site, defaultIntervalSeconds) * 1000;
 }
 
 async function syncDueSites(dependencies = {}) {
@@ -195,5 +213,6 @@ module.exports = {
   startSiteSync,
   syncAllSites,
   syncDueSites,
-  shouldSyncSite
+  shouldSyncSite,
+  syncBackoffSeconds
 };

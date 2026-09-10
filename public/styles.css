@@ -516,6 +516,8 @@ svg { display: block; }
 .settings-form-grid.compact-grid { grid-template-columns: repeat(3, minmax(160px, 1fr)); align-items: end; }
 .setting-field { min-width: 0; display: grid; gap: 7px; }
 .setting-field > span { color: var(--text-secondary); font-size: 12px; font-weight: 650; }
+.password-save-field { align-content: end; }
+.setting-spacer { min-height: 12px; }
 .toggle-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 10px; margin-bottom: 18px; }
 .toggle-field { position: relative; min-height: 40px; display: inline-flex; align-items: center; gap: 10px; color: var(--text-secondary); font-size: 13px; font-weight: 620; cursor: pointer; }
 .toggle-field input { position: absolute; width: 1px; min-height: 1px; opacity: 0; pointer-events: none; }

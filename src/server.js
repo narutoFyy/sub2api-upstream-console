@@ -23,6 +23,7 @@ const { startRuntimeScheduler, schedulerAllowed } = require('./runtimeScheduler'
 const { createUpdateService } = require('./updateService');
 const database = require('./db');
 const { finiteNumberOrNull } = require('./utils');
+const { getConsoleAuth, verifyConsolePassword, changeConsolePassword, toClientErrorStatus } = require('./consoleAuth');
 const {
   listSub2APIKeys,
   listSub2APIGroups,
@@ -70,8 +71,12 @@ function makeSessionCookie() {
   return `${value}.${signSession(value)}`;
 }
 
+function consoleAuthEnabled() {
+  return getConsoleAuth(repo).enabled;
+}
+
 function isValidSession(cookieValue) {
-  if (!config.adminPassword) return true;
+  if (!consoleAuthEnabled()) return true;
   if (!cookieValue || typeof cookieValue !== 'string') return false;
   const parts = cookieValue.split('.');
   if (parts.length < 3) return false;
@@ -84,7 +89,7 @@ function isValidSession(cookieValue) {
 }
 
 function requireAuth(req, res, next) {
-  if (!config.adminPassword) return next();
+  if (!consoleAuthEnabled()) return next();
   const cookies = parseCookies(req.headers.cookie || '');
   if (isValidSession(cookies[config.sessionCookieName])) return next();
   return res.status(401).json({ error: '请先登录控制台' });
@@ -343,14 +348,14 @@ app.get('/api/health', (req, res) => {
 app.get('/api/session', (req, res) => {
   const cookies = parseCookies(req.headers.cookie || '');
   const authenticated = isValidSession(cookies[config.sessionCookieName]);
-  res.json({ auth_enabled: Boolean(config.adminPassword), authenticated });
+  res.json({ auth_enabled: consoleAuthEnabled(), authenticated });
 });
 
 app.post('/api/login', (req, res) => {
-  if (!config.adminPassword) {
+  if (!consoleAuthEnabled()) {
     return res.json({ ok: true, auth_enabled: false });
   }
-  if (req.body?.password !== config.adminPassword) {
+  if (!verifyConsolePassword(req.body?.password, repo)) {
     return res.status(401).json({ error: '控制台密码错误' });
   }
   res.setHeader('Set-Cookie', `${config.sessionCookieName}=${encodeURIComponent(makeSessionCookie())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${config.sessionMaxAgeSeconds}`);
@@ -522,7 +527,7 @@ app.put('/api/upstreams/:id', (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const payload = siteUpdateSchema.parse(sanitizeSitePayload(req.body, { partial: true }));
-    for (const field of ['email', 'password', 'token']) {
+    for (const field of ['email', 'password', 'token', 'refresh_token']) {
       if (payload[field] === '') delete payload[field];
     }
     const site = repo.updateSite(id, payload);
@@ -918,6 +923,21 @@ app.put('/api/settings/runtime', (req, res, next) => {
   }
 });
 
+app.post('/api/account/password', (req, res, next) => {
+  try {
+    const payload = z.object({
+      current_password: z.string().min(1),
+      new_password: z.string().min(8).max(200)
+    }).parse(req.body || {});
+    res.json(changeConsolePassword({
+      currentPassword: payload.current_password,
+      newPassword: payload.new_password
+    }, repo));
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.get('/api/system/update', async (req, res, next) => {
   try {
     res.json(await updateService.inspect());
@@ -1207,8 +1227,8 @@ app.get('/api/sync-logs', (req, res) => {
 if (schedulerAllowed(config)) startRuntimeScheduler();
 
 app.use((err, req, res, next) => {
-  const status = err.status || err.statusCode || 400;
-  res.status(status >= 100 && status < 600 ? status : 500).json({
+  const status = toClientErrorStatus(err);
+  res.status(status).json({
     error: err.message || 'Request failed',
     details: err.issues || undefined
   });

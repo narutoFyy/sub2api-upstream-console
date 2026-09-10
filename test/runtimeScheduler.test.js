@@ -2,7 +2,7 @@ require('./testEnv');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { shouldSyncSite } = require('../src/syncService');
+const { shouldSyncSite, syncBackoffSeconds } = require('../src/syncService');
 const { shouldCheckSite } = require('../src/keyConnectivityService');
 const { createSchedulerState, runRuntimeScheduler } = require('../src/runtimeScheduler');
 
@@ -66,4 +66,11 @@ test('site due checks honor per-upstream task switches and intervals', () => {
   assert.equal(shouldCheckSite({ key_check_enabled: 0, last_key_check_at: old }, now), false);
   assert.equal(shouldSyncSite({ sync_enabled: 1, last_sync_at: old, sync_interval_seconds: 300 }, now), true);
   assert.equal(shouldCheckSite({ key_check_enabled: 1, last_key_check_at: old, key_check_interval_seconds: 900 }, now), false);
+  assert.equal(shouldSyncSite({
+    sync_enabled: 1,
+    last_sync_attempt_at: '2026-07-21T11:59:00.000Z',
+    sync_failure_count: 8,
+    sync_interval_seconds: 180
+  }, now), false);
+  assert.equal(syncBackoffSeconds({ sync_failure_count: 8, sync_interval_seconds: 180 }), 6 * 60 * 60);
 });

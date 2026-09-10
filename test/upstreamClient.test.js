@@ -16,6 +16,7 @@ const {
   sanitizeUpstreamText,
   tokenExpiryIso,
   tokenNeedsRefresh,
+  decorateUpstreamAuthError,
   upstreamErrorMessage
 } = require('../src/upstreamClient');
 
@@ -265,6 +266,108 @@ test('upstream diagnostics redact secrets and cap long messages', () => {
   assert.match(message, /Bearer \[redacted\]/);
   assert.doesNotMatch(message, /hunter2|abc\.def/);
   assert.ok(message.length <= 120);
+});
+
+test('HTTP 200 refresh rejections still fall back to password login', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url) => {
+    const parsed = new URL(String(url));
+    calls.push(parsed.pathname);
+    if (parsed.pathname === '/api/v1/auth/refresh') {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: async () => JSON.stringify({ code: 401, message: 'invalid refresh token' })
+      };
+    }
+    if (parsed.pathname === '/api/v1/auth/login') {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: async () => JSON.stringify({
+          code: 0,
+          data: { access_token: 'access-from-password', refresh_token: 'refresh-from-password', expires_in: 3600 }
+        })
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: async () => JSON.stringify({ code: 0, data: {} })
+    };
+  };
+  try {
+    const state = await fetchSub2APIState({
+      baseUrl: 'https://1.1.1.1',
+      upstreamType: 'sub2api',
+      email: 'fixture@example.com',
+      password: 'fixture-password',
+      token: 'expired-access',
+      refreshToken: 'revoked-refresh',
+      tokenExpiresAt: '2020-01-01T00:00:00.000Z'
+    });
+    assert.equal(state.token, 'access-from-password');
+    assert.ok(calls.includes('/api/v1/auth/login'));
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('New API reuses a stored session instead of logging in again', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options) => {
+    const parsed = new URL(String(url));
+    calls.push({ path: parsed.pathname, cookie: options?.headers?.cookie || '' });
+    let body = { code: 0, data: {} };
+    if (parsed.pathname === '/api/user/login') {
+      body = { success: false, message: 'should not login' };
+      return { ok: false, status: 409, headers: new Headers(), text: async () => JSON.stringify({ code: 'AUTH_SESSION_LIMIT', message: 'Conflict', success: false }) };
+    }
+    if (parsed.pathname === '/api/user/self') {
+      body = { code: 0, data: { id: 9, quota: 500000, request_count: 3, used_quota: 100000, total_tokens: 8 } };
+    } else if (parsed.pathname === '/api/user/self/groups') {
+      body = { code: 0, data: [] };
+    } else if (parsed.pathname === '/api/token/') {
+      body = { code: 0, data: { items: [], total: 0 } };
+    } else if (parsed.pathname === '/api/status') {
+      body = { code: 0, data: { quota_per_unit: 500000, quota_display_type: 'USD' } };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: async () => JSON.stringify(body)
+    };
+  };
+  try {
+    const state = await fetchNewAPIState({
+      baseUrl: 'https://1.1.1.1',
+      email: 'user',
+      password: 'secret',
+      sessionCookie: 'session=keep-me'
+    });
+    assert.equal(state.login.user_id, 9);
+    assert.equal(state.session_cookie, 'session=keep-me');
+    assert.equal(state.login.login_path, 'session');
+    assert.equal(calls.some((item) => item.path === '/api/user/login'), false);
+    assert.equal(calls.find((item) => item.path === '/api/user/self').cookie, 'session=keep-me');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('turnstile login failures become an actionable console error', () => {
+  const error = decorateUpstreamAuthError({
+    message: 'Login failed on known Sub2API paths: /api/v1/auth/login: Upstream /auth/login returned 400: 400 | turnstile verification failed',
+    status: 400
+  });
+  assert.match(error.message, /人机验证/);
+  assert.match(error.message, /Access Token/);
 });
 
 test('API discovery follows public config and service links on the same site', () => {

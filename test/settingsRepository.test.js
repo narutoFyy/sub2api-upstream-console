@@ -19,6 +19,7 @@ test('upstream refresh tokens are encrypted and can be rotated independently', (
     password: '',
     token: 'access-one',
     refresh_token: 'refresh-one',
+    session_cookie: '',
     token_expires_at: '2026-07-22T01:00:00.000Z'
   });
   repo.saveCredentialTokens(site.id, {
@@ -29,7 +30,11 @@ test('upstream refresh tokens are encrypted and can be rotated independently', (
   const rotated = repo.getCredentials(site.id);
   assert.equal(rotated.token, 'access-two');
   assert.equal(rotated.refresh_token, 'refresh-two');
+  assert.equal(rotated.session_cookie, '');
   assert.equal(rotated.token_expires_at, '2026-07-23T01:00:00.000Z');
+  repo.saveCredentialTokens(site.id, { session_cookie: 'session=keep-me' });
+  assert.equal(repo.getCredentials(site.id).session_cookie, 'session=keep-me');
+  assert.equal(repo.getCredentials(site.id).token, 'access-two');
 
   const stored = db.prepare('SELECT encrypted_token, encrypted_refresh_token FROM upstream_credentials WHERE upstream_site_id = ?').get(site.id);
   assert.notEqual(stored.encrypted_token, 'access-two');

@@ -106,7 +106,8 @@ async function api(path, options = {}) {
     ? apiErrorMessage(parseFailed ? text : (data?.error || data?.message || text), response.status)
     : '';
   if (response.status === 401) {
-    showLogin();
+    const consoleAuthError = path === '/api/login' || path === '/api/session' || data?.error === '请先登录控制台' || data?.error === '控制台密码错误';
+    if (consoleAuthError) showLogin();
     throw new Error(errorMessage || '请先登录控制台');
   }
   if (!response.ok) throw new Error(errorMessage || `HTTP ${response.status}`);
@@ -1219,6 +1220,7 @@ function fillUpstreamForm(detail = null) {
   form.email.value = credentials.email && !credentials.email.includes('*') ? credentials.email : '';
   form.password.value = '';
   form.token.value = '';
+  if (form.refresh_token) form.refresh_token.value = '';
   form.low_balance_threshold.value = site.low_balance_threshold ?? 10;
   form.rate_change_threshold_percent.value = site.rate_change_threshold_percent ?? 20;
   form.sync_interval_seconds.value = site.sync_interval_seconds ?? 180;
@@ -1439,6 +1441,35 @@ async function syncAllUpstreamModels(button) {
 for (const selector of ['#syncAllModelsBtn', '#syncAllModelsTopBtn']) {
   document.querySelector(selector).addEventListener('click', (event) => runAction(event.currentTarget, '同步中', () => syncAllUpstreamModels(event.currentTarget)));
 }
+
+document.querySelector('#consolePasswordForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = document.querySelector('#consolePasswordMessage');
+  const currentPassword = form.current_password.value;
+  const newPassword = form.new_password.value;
+  const confirmPassword = form.confirm_password.value;
+  message.className = 'form-message';
+  if (newPassword !== confirmPassword) {
+    message.textContent = '两次输入的新密码不一致';
+    message.className = 'form-message error';
+    return;
+  }
+  try {
+    await api('/api/account/password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+    });
+    form.reset();
+    message.textContent = '密码已更新';
+    message.className = 'form-message success';
+    toast('控制台密码已更新', 'success');
+  } catch (error) {
+    message.textContent = error.message;
+    message.className = 'form-message error';
+    toast(error.message, 'error');
+  }
+});
 
 document.querySelector('#runtimeSettingsSaveBtn').addEventListener('click', async (event) => {
   const next = collectRuntimeSettings();

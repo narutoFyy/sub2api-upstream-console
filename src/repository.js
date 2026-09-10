@@ -114,6 +114,7 @@ function getCredentials(siteId) {
     password: decryptSecret(row.encrypted_password),
     token: decryptSecret(row.encrypted_token),
     refresh_token: decryptSecret(row.encrypted_refresh_token),
+    session_cookie: decryptSecret(row.encrypted_session_cookie),
     token_expires_at: row.token_expires_at
   };
 }
@@ -125,7 +126,8 @@ function getMaskedCredentials(siteId) {
     email: creds.email,
     password_masked: maskSecret(creds.password),
     token_masked: maskSecret(creds.token),
-    refresh_token_masked: maskSecret(creds.refresh_token)
+    refresh_token_masked: maskSecret(creds.refresh_token),
+    session_cookie_masked: maskSecret(creds.session_cookie)
   };
 }
 
@@ -169,15 +171,16 @@ function createSite(input) {
     db.prepare(`
       INSERT INTO upstream_credentials (
         upstream_site_id, encrypted_email, encrypted_password, encrypted_token,
-        encrypted_refresh_token, token_expires_at, created_at, updated_at
+        encrypted_refresh_token, encrypted_session_cookie, token_expires_at, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       result.lastInsertRowid,
       encryptSecret(input.email || ''),
       encryptSecret(input.password || ''),
       encryptSecret(input.token || ''),
       encryptSecret(input.refresh_token || ''),
+      encryptSecret(input.session_cookie || ''),
       input.token_expires_at || null,
       now,
       now
@@ -237,14 +240,15 @@ function updateSite(id, input) {
     db.prepare(`
       INSERT INTO upstream_credentials (
         upstream_site_id, encrypted_email, encrypted_password, encrypted_token,
-        encrypted_refresh_token, token_expires_at, created_at, updated_at
+        encrypted_refresh_token, encrypted_session_cookie, token_expires_at, created_at, updated_at
       )
-      VALUES (@id, @email, @password, @token, @refresh_token, @token_expires_at, @now, @now)
+      VALUES (@id, @email, @password, @token, @refresh_token, @session_cookie, @token_expires_at, @now, @now)
       ON CONFLICT(upstream_site_id) DO UPDATE SET
         encrypted_email=@email,
         encrypted_password=@password,
         encrypted_token=@token,
         encrypted_refresh_token=@refresh_token,
+        encrypted_session_cookie=@session_cookie,
         token_expires_at=@token_expires_at,
         updated_at=@now
     `).run({
@@ -253,6 +257,11 @@ function updateSite(id, input) {
       password: encryptSecret(input.password ?? currentCreds.password ?? ''),
       token: encryptSecret(input.token ?? currentCreds.token ?? ''),
       refresh_token: encryptSecret(input.refresh_token ?? currentCreds.refresh_token ?? ''),
+      session_cookie: encryptSecret(
+        input.session_cookie ?? (
+          input.token && input.token !== currentCreds.token ? '' : (currentCreds.session_cookie ?? '')
+        )
+      ),
       token_expires_at: input.token_expires_at ?? currentCreds.token_expires_at ?? null,
       now
     });
@@ -587,16 +596,17 @@ function getMaskedOwnSiteCredentials(id) {
   };
 }
 
-function saveCredentialTokens(siteId, { token, refresh_token, token_expires_at }) {
+function saveCredentialTokens(siteId, { token, refresh_token, token_expires_at, session_cookie } = {}) {
   const current = getCredentials(siteId);
   if (!current) return false;
   return db.prepare(`
     UPDATE upstream_credentials
-    SET encrypted_token = ?, encrypted_refresh_token = ?, token_expires_at = ?, updated_at = ?
+    SET encrypted_token = ?, encrypted_refresh_token = ?, encrypted_session_cookie = ?, token_expires_at = ?, updated_at = ?
     WHERE upstream_site_id = ?
   `).run(
     encryptSecret(token || current.token || ''),
     encryptSecret(refresh_token || current.refresh_token || ''),
+    encryptSecret(session_cookie === undefined ? (current.session_cookie || '') : (session_cookie || '')),
     token_expires_at || current.token_expires_at || null,
     nowIso(),
     siteId
@@ -835,10 +845,10 @@ function saveSyncSuccess(siteId, result, limits = {}) {
 
     db.prepare(`
       UPDATE upstream_sites
-      SET status='active', last_sync_at=?, last_sync_error='',
+      SET status='active', last_sync_at=?, last_sync_attempt_at=?, last_sync_error='',
           sync_failure_count=0, sync_success_count=sync_success_count + 1, updated_at=?
       WHERE id=?
-    `).run(now, now, siteId);
+    `).run(now, now, now, siteId);
 
     pruneTelemetry(siteId, limits);
   });
@@ -892,10 +902,10 @@ function saveSyncLog(siteId, syncType, startedAt, status, error, summary = '') {
   if (status !== 'success') {
     db.prepare(`
       UPDATE upstream_sites
-      SET status='sync_failed', last_sync_error=?, sync_failure_count=sync_failure_count + 1,
+      SET status='sync_failed', last_sync_error=?, last_sync_attempt_at=?, sync_failure_count=sync_failure_count + 1,
           sync_success_count=0, updated_at=?
       WHERE id=?
-    `).run(error?.message || 'Sync failed', finishedAt, siteId);
+    `).run(error?.message || 'Sync failed', finishedAt, finishedAt, siteId);
   }
 }
 

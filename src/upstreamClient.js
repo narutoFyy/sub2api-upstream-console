@@ -207,6 +207,43 @@ function tokenNeedsRefresh(token, tokenExpiresAt, now = Date.now()) {
   return Number.isFinite(expiry) && expiry <= now + TOKEN_REFRESH_LEEWAY_MS;
 }
 
+function errorText(error) {
+  return [
+    error?.message,
+    error?.body?.code,
+    error?.body?.reason,
+    error?.body?.error,
+    error?.body?.message
+  ].map((item) => String(item || '')).join(' ');
+}
+
+function isAuthFailure(error) {
+  const status = Number(error?.status);
+  if (status === 401 || status === 403) return true;
+  return /401|403|unauthorized|unauthorised|token[_\s-]?expir|invalid refresh|invalid access token|TOKEN_EXPIRED|REFRESH_TOKEN_INVALID|AUTH_TOKEN_EXPIRED|not logged in/i.test(errorText(error));
+}
+
+function isSessionLimitError(error) {
+  return /AUTH_SESSION_LIMIT|AUTH_SESSION_ISSUANCE_LIMIT|too many active login sessions|too many login sessions were created/i.test(errorText(error));
+}
+
+function decorateUpstreamAuthError(error) {
+  const message = errorText(error);
+  if (/TURNSTILE|turnstile verification failed|captcha/i.test(message)) {
+    const wrapped = new Error('该上游登录开启了人机验证，账号密码无法自动同步。请在浏览器登录后，把 Access Token 和 Refresh Token 填到上游编辑页。');
+    wrapped.cause = error;
+    wrapped.status = error?.status || 422;
+    return wrapped;
+  }
+  if (isSessionLimitError(error)) {
+    const wrapped = new Error('该上游同时登录会话已满。请到上游网站退出其他设备会话后重试；控制台之后会复用已有会话，避免反复登录挤掉会话。');
+    wrapped.cause = error;
+    wrapped.status = error?.status || 409;
+    return wrapped;
+  }
+  return error;
+}
+
 async function refreshAccessToken(baseUrl, refreshToken) {
   const data = await requestJson(baseUrl, '/auth/refresh', {
     method: 'POST',
@@ -261,11 +298,27 @@ async function loginWithPassword(baseUrl, email, password) {
   throw new Error(sanitizeUpstreamText(`Login failed on known Sub2API paths: ${attempts.join('; ')}`, 720));
 }
 
-async function loginWithNewAPI(baseUrl, email, password) {
+function newAPILoginBodies(email, password, kickSessions = false) {
+  const base = [{ username: email, password }, { email, password }];
+  if (!kickSessions) return base;
+  return [
+    ...base.map((body) => ({ ...body, expired_sessions: true })),
+    ...base.map((body) => ({ ...body, expiredSessions: true }))
+  ];
+}
+
+function describeNewAPILoginBody(body) {
+  const keys = Object.keys(body).filter((key) => key !== 'password');
+  return keys.join('+') || 'credentials';
+}
+
+async function loginWithNewAPI(baseUrl, email, password, options = {}) {
   if (!email || !password) throw new Error('New API account/password is required for user data');
+  const kickSessions = options.kickSessions === true;
   const attempts = [];
+  let sessionLimit = false;
   for (const path of ['/user/login', '/login']) {
-    for (const body of [{ username: email, password }, { email, password }]) {
+    for (const body of newAPILoginBodies(email, password, kickSessions)) {
       try {
         const login = await requestJson(baseUrl, path, {
           method: 'POST',
@@ -290,11 +343,67 @@ async function loginWithNewAPI(baseUrl, email, password) {
           login_path: path
         };
       } catch (err) {
-        attempts.push(`${path}(${Object.keys(body)[0]}): ${sanitizeUpstreamText(err.message, 180)}`);
+        if (isSessionLimitError(err)) sessionLimit = true;
+        attempts.push(`${path}(${describeNewAPILoginBody(body)}): ${sanitizeUpstreamText(err.message, 180)}`);
       }
     }
   }
-  throw new Error(sanitizeUpstreamText(`New API login failed: ${attempts.join('; ')}`, 720));
+  if (sessionLimit && !kickSessions) {
+    return loginWithNewAPI(baseUrl, email, password, { ...options, kickSessions: true });
+  }
+  const error = new Error(sanitizeUpstreamText(`New API login failed: ${attempts.join('; ')}`, 720));
+  if (sessionLimit) error.status = 409;
+  throw error;
+}
+
+async function authenticateNewAPI({ baseUrl, email, password, token, sessionCookie }) {
+  const existing = [];
+  if (sessionCookie) {
+    existing.push({
+      cookie: sessionCookie,
+      token: token || '',
+      headers: {},
+      prefix: '/api',
+      login_path: 'session'
+    });
+  }
+  if (token) {
+    existing.push({
+      cookie: sessionCookie || '',
+      token,
+      headers: {},
+      prefix: '/api',
+      login_path: 'token'
+    });
+  }
+  for (const auth of existing) {
+    try {
+      const profile = await requestJson(baseUrl, '/user/self', { ...auth, timeoutMs: LOGIN_TIMEOUT_MS });
+      const userId = profile?.id ?? profile?.user_id;
+      return {
+        user: profile && typeof profile === 'object' ? profile : {},
+        cookie: auth.cookie,
+        token: auth.token,
+        headers: userId ? { 'New-Api-User': String(userId) } : {},
+        prefix: '/api',
+        login_path: auth.login_path
+      };
+    } catch (err) {
+      if (!isAuthFailure(err) && !isSessionLimitError(err)) throw err;
+    }
+  }
+  if (email && password) return loginWithNewAPI(baseUrl, email, password);
+  if (token || sessionCookie) {
+    return {
+      user: {},
+      cookie: sessionCookie || '',
+      token: token || '',
+      headers: {},
+      prefix: '/api',
+      login_path: sessionCookie ? 'session' : 'token'
+    };
+  }
+  throw new Error('New API requires account/password or a valid session');
 }
 
 function extractBalance(profile) {
@@ -787,17 +896,14 @@ function normalizeNewAPIPricing(pricingPayload, ratioConfigPayload = null) {
   };
 }
 
-async function fetchNewAPIState({ baseUrl, email, password, token }) {
-  const login = email && password
-    ? await loginWithNewAPI(baseUrl, email, password)
-    : {
-        user: {},
-        cookie: '',
-        token: token || '',
-        headers: {},
-        prefix: '/api',
-        login_path: 'token'
-      };
+async function fetchNewAPIState({ baseUrl, email, password, token, sessionCookie }) {
+  const login = await authenticateNewAPI({
+    baseUrl,
+    email,
+    password,
+    token,
+    sessionCookie
+  });
   if (!login.cookie && !login.token) throw new Error('New API requires account/password or an API token');
   const auth = { cookie: login.cookie, token: login.token, headers: login.headers, prefix: login.prefix };
   const results = {};
@@ -866,6 +972,7 @@ async function fetchNewAPIState({ baseUrl, email, password, token }) {
 
   return {
     token: login.token || token || null,
+    session_cookie: login.cookie || sessionCookie || '',
     login: {
       provider: 'new-api',
       prefix: login.prefix,
@@ -936,7 +1043,7 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, re
       activeTokenExpiresAt = refreshed.token_expires_at;
     } catch (error) {
       // A refresh token can be revoked independently of the account password.
-      if (!email || !password || error?.status !== 401) throw error;
+      if (!email || !password || !isAuthFailure(error)) throw error;
       login = await loginWithPassword(baseUrl, email, password);
       activeToken = login.token;
       activeRefreshToken = login.refresh_token;
@@ -1012,6 +1119,7 @@ async function fetchSub2APICompatibleState({ baseUrl, email, password, token, re
     token: activeToken,
     refresh_token: activeRefreshToken,
     token_expires_at: activeTokenExpiresAt,
+    session_cookie: '',
     login,
     profile,
     usage,
@@ -1062,25 +1170,29 @@ async function fetchSub2APIState(input) {
   let effectiveBaseUrl = input.baseUrl;
   try {
     effectiveBaseUrl = await discoverUpstreamBaseUrl(input.baseUrl);
-  } catch (error) {
-    throw new Error(`Unable to discover upstream API endpoint: ${sanitizeUpstreamText(error.message, 300)}`);
+  } catch {
+    effectiveBaseUrl = input.baseUrl;
   }
   const effectiveInput = { ...input, baseUrl: effectiveBaseUrl };
   const upstreamType = input.upstreamType || input.upstream_type || 'auto';
-  if (upstreamType === 'sub2api') {
-    return fetchSub2APICompatibleState(effectiveInput);
-  }
-  if (upstreamType === 'new-api' || upstreamType === 'newapi') {
-    return fetchNewAPIState(effectiveInput);
-  }
   try {
-    return await fetchSub2APICompatibleState(effectiveInput);
-  } catch (sub2apiError) {
-    try {
-      return await fetchNewAPIState(effectiveInput);
-    } catch (newAPIError) {
-      throw new Error(sanitizeUpstreamText(`Sync failed. Sub2API: ${sub2apiError.message}; New API: ${newAPIError.message}`, 960));
+    if (upstreamType === 'sub2api') {
+      return await fetchSub2APICompatibleState(effectiveInput);
     }
+    if (upstreamType === 'new-api' || upstreamType === 'newapi') {
+      return await fetchNewAPIState(effectiveInput);
+    }
+    try {
+      return await fetchSub2APICompatibleState(effectiveInput);
+    } catch (sub2apiError) {
+      try {
+        return await fetchNewAPIState(effectiveInput);
+      } catch (newAPIError) {
+        throw decorateUpstreamAuthError(new Error(sanitizeUpstreamText(`Sync failed. Sub2API: ${sub2apiError.message}; New API: ${newAPIError.message}`, 960)));
+      }
+    }
+  } catch (error) {
+    throw decorateUpstreamAuthError(error);
   }
 }
 
@@ -1154,10 +1266,14 @@ module.exports = {
   newAPIQuotaDisplay,
   fetchNewAPITokens,
   loginWithNewAPI,
+  authenticateNewAPI,
   loginWithPassword,
   refreshAccessToken,
   tokenExpiryIso,
   tokenNeedsRefresh,
+  isAuthFailure,
+  isSessionLimitError,
+  decorateUpstreamAuthError,
   requestJson,
   sanitizeUpstreamText,
   upstreamErrorMessage,
