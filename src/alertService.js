@@ -1,5 +1,5 @@
 const repo = require('./repository');
-const { sendPushPlus } = require('./pushPlusClient');
+const { deliverNotificationGroup } = require('./notificationDelivery');
 const { defaultRuntimeSettings, runtimeSettingsStatus } = require('./runtimeSettings');
 const { finiteNumberOrNull } = require('./utils');
 
@@ -149,16 +149,17 @@ async function deliverAlertNotifications(items, dependencies = {}) {
   if (!notifications.length) return { sent: 0, errors: [] };
   const repository = dependencies.repo || repo;
   const settings = alertSettings(dependencies);
-  const notify = dependencies.notify || sendPushPlus;
   let sent = 0;
   const errors = [];
 
   for (const group of groupNotifications(notifications, settings.notification_grouping)) {
     try {
-      await notify(groupedPayload(group), {
+      const deliveryDependencies = {
         ...dependencies,
         timeoutMs: settings.pushplus_timeout_ms
-      });
+      };
+      if (dependencies.notify) await dependencies.notify(groupedPayload(group), deliveryDependencies);
+      else await deliverNotificationGroup(group, groupedPayload(group), deliveryDependencies);
       for (const item of group) {
         const alertId = item.alert?.id;
         if (alertId == null) continue;
@@ -169,7 +170,7 @@ async function deliverAlertNotifications(items, dependencies = {}) {
     } catch (error) {
       errors.push(error);
       if (dependencies.onNotificationError) dependencies.onNotificationError(error);
-      else console.error('PushPlus alert delivery failed:', error.message);
+      else console.error('Alert delivery failed:', error.message);
     }
   }
   return { sent, errors };
@@ -194,6 +195,10 @@ async function resolveAndNotify(fingerprint, input, dependencies = {}) {
   const open = repository.findOpenAlert(fingerprint);
   let resolved = open ? repository.resolveAlert(fingerprint) : repository.findLatestAlert?.(fingerprint);
   if (!resolved || resolved.status !== 'resolved') return null;
+  // A partially delivered incident still needs a recovery notice, even when another channel failed.
+  if (!resolved.notified_at && repository.hasIncidentNotificationDelivery?.(resolved.id)) {
+    resolved = { ...resolved, notified_at: resolved.opened_at };
+  }
   const now = dependencies.now instanceof Date ? dependencies.now : new Date(dependencies.now || Date.now());
   const notification = recoveryNotificationDue(resolved, input, settings, now)
     ? notificationDescriptor('recovery', resolved, input)

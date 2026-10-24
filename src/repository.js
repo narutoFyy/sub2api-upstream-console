@@ -1656,6 +1656,22 @@ function openOrTouchAlert(input) {
   return db.prepare('SELECT * FROM alert_events WHERE id = ?').get(result.lastInsertRowid);
 }
 
+function hasNotificationDelivery(alertId, kind, channel, cycle) {
+  return Boolean(db.prepare(`SELECT 1 FROM alert_notification_deliveries
+    WHERE alert_id=? AND kind=? AND channel=? AND cycle=?`).get(alertId, kind, channel, cycle));
+}
+
+function hasIncidentNotificationDelivery(alertId) {
+  return Boolean(db.prepare("SELECT 1 FROM alert_notification_deliveries WHERE alert_id=? AND kind='incident' LIMIT 1").get(alertId));
+}
+
+function recordNotificationDelivery(alertId, kind, channel, cycle) {
+  db.prepare(`INSERT INTO alert_notification_deliveries (alert_id, kind, channel, cycle, delivered_at)
+    VALUES (?, ?, ?, ?, ?) ON CONFLICT(alert_id, kind, channel)
+    DO UPDATE SET cycle=excluded.cycle, delivered_at=excluded.delivered_at`)
+    .run(alertId, kind, channel, cycle, nowIso());
+}
+
 function markAlertNotified(id, at = nowIso()) {
   db.prepare(`
     UPDATE alert_events
@@ -2101,6 +2117,9 @@ module.exports = {
   findLatestAlert,
   openOrTouchAlert,
   markAlertNotified,
+  hasNotificationDelivery,
+  hasIncidentNotificationDelivery,
+  recordNotificationDelivery,
   resolveAlert,
   markRecoveryNotified,
   acknowledgeAlert,

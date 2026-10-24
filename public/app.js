@@ -860,7 +860,7 @@ function renderAlerts() {
 
 function renderUpstreamPolicies() {
   const rows = document.querySelector('#runtimeUpstreamRows');
-  rows.innerHTML = (state.monitoring.items || []).map((site) => `<tr class="data-row" data-policy-site="${site.id}"><td><div class="cell-stack"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="sync_enabled" ${Number(site.sync_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 自动同步" /><span class="toggle-control"></span></label><input type="number" min="30" max="86400" value="${Number(site.sync_interval_seconds || 180)}" data-policy-field="sync_interval_seconds" aria-label="${escapeHtml(site.name)} 同步周期" /></div></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="key_check_enabled" ${Number(site.key_check_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} Key 探测" /><span class="toggle-control"></span></label><input type="number" min="60" max="86400" value="${Number(site.key_check_interval_seconds || 300)}" data-policy-field="key_check_interval_seconds" aria-label="${escapeHtml(site.name)} Key 探测周期" /></div></td><td><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="alert_notifications_enabled" ${Number(site.alert_notifications_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 微信通知" /><span class="toggle-control"></span></label></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="low_balance_alert_enabled" ${Number(site.low_balance_alert_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 余额预警" /><span class="toggle-control"></span></label><input type="number" min="0" step="0.0001" value="${Number(site.low_balance_threshold ?? 10)}" data-policy-field="low_balance_threshold" aria-label="${escapeHtml(site.name)} 余额阈值" /></div></td><td><input class="policy-number" type="number" min="0" value="${Number(site.rate_change_threshold_percent ?? 20)}" data-policy-field="rate_change_threshold_percent" aria-label="${escapeHtml(site.name)} 倍率变化阈值" /></td><td class="align-right"><button class="icon-btn" type="button" data-save-upstream-policy="${site.id}" title="保存上游策略"><i data-lucide="save"></i></button></td></tr>`).join('') || '<tr><td colspan="7"><div class="empty-state">还没有上游</div></td></tr>';
+  rows.innerHTML = (state.monitoring.items || []).map((site) => `<tr class="data-row" data-policy-site="${site.id}"><td><div class="cell-stack"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="sync_enabled" ${Number(site.sync_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 自动同步" /><span class="toggle-control"></span></label><input type="number" min="30" max="86400" value="${Number(site.sync_interval_seconds || 180)}" data-policy-field="sync_interval_seconds" aria-label="${escapeHtml(site.name)} 同步周期" /></div></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="key_check_enabled" ${Number(site.key_check_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} Key 探测" /><span class="toggle-control"></span></label><input type="number" min="60" max="86400" value="${Number(site.key_check_interval_seconds || 300)}" data-policy-field="key_check_interval_seconds" aria-label="${escapeHtml(site.name)} Key 探测周期" /></div></td><td><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="alert_notifications_enabled" ${Number(site.alert_notifications_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 告警通知" /><span class="toggle-control"></span></label></td><td><div class="policy-control"><label class="toggle-field compact-toggle"><input type="checkbox" data-policy-field="low_balance_alert_enabled" ${Number(site.low_balance_alert_enabled ?? 1) ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 余额预警" /><span class="toggle-control"></span></label><input type="number" min="0" step="0.0001" value="${Number(site.low_balance_threshold ?? 10)}" data-policy-field="low_balance_threshold" aria-label="${escapeHtml(site.name)} 余额阈值" /></div></td><td><input class="policy-number" type="number" min="0" value="${Number(site.rate_change_threshold_percent ?? 20)}" data-policy-field="rate_change_threshold_percent" aria-label="${escapeHtml(site.name)} 倍率变化阈值" /></td><td class="align-right"><button class="icon-btn" type="button" data-save-upstream-policy="${site.id}" title="保存上游策略"><i data-lucide="save"></i></button></td></tr>`).join('') || '<tr><td colspan="7"><div class="empty-state">还没有上游</div></td></tr>';
 }
 
 function setSettingsTab(tab) {
@@ -871,6 +871,7 @@ function setSettingsTab(tab) {
 }
 
 function renderSettings() {
+  renderEmailSettings();
   const status = state.runtimeSettings || {};
   const settings = status.settings;
   if (!settings) return;
@@ -890,6 +891,33 @@ function renderSettings() {
   renderUpstreamPolicies();
   renderSystemUpdate();
   setSettingsTab(state.settingsTab);
+}
+
+function renderEmailSettings(force = false) {
+  if (!state.monitoring.email) return;
+  const settings = state.monitoring.email || {};
+  document.querySelector('#emailSettingStatus').textContent = settings.configured
+    ? `${settings.enabled ? '已启用' : '已停用'} · ${settings.host}:${settings.port} · ${settings.to.length} 个收件人`
+    : '未配置';
+  document.querySelector('#emailTestBtn').disabled = !settings.configured;
+  document.querySelector('#emailClearBtn').disabled = !settings.configured;
+  const form = document.querySelector('#emailForm');
+  if (form.dataset.loaded && !force) return;
+  form.reset();
+  if (settings.configured) {
+    for (const field of ['host', 'port', 'security', 'user', 'from', 'timeout_ms']) form.elements[field].value = settings[field];
+    form.elements.to.value = settings.to.join(', ');
+    form.elements.enabled.checked = settings.enabled;
+  }
+  form.elements.password.placeholder = settings.has_password ? '已保存，留空保留原值' : '首次配置请填写';
+  form.dataset.loaded = 'true';
+}
+
+function setEmailFeedback(message, tone = '') {
+  const element = document.querySelector('#emailFeedback');
+  element.hidden = !message;
+  element.textContent = message;
+  element.className = `pushplus-test-feedback ${tone}`;
 }
 
 function renderSystemUpdate() {
@@ -1499,6 +1527,42 @@ document.querySelector('#acknowledgeVisibleAlertsBtn').addEventListener('click',
   });
   renderAlerts();
   refreshIcons();
+});
+
+document.querySelector('#emailForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = Object.fromEntries(new FormData(form));
+  payload.enabled = form.elements.enabled.checked;
+  payload.port = Number(payload.port);
+  payload.timeout_ms = Number(payload.timeout_ms);
+  payload.to = payload.to.split(/[,;，；\s]+/).map((value) => value.trim()).filter(Boolean);
+  if (!payload.password) delete payload.password;
+  await runAction(form.querySelector('button[type="submit"]'), '保存中', async () => {
+    try {
+      state.monitoring.email = await api('/api/notifications/email/settings', { method: 'PUT', body: JSON.stringify(payload) });
+      renderEmailSettings(true);
+      setEmailFeedback('邮箱配置已保存。点击“测试已保存配置”检查收件情况。', 'success');
+    } catch (error) { setEmailFeedback(error.message, 'error'); throw error; }
+  });
+});
+
+document.querySelector('#emailTestBtn').addEventListener('click', async (event) => {
+  await runAction(event.currentTarget, '发送中', async () => {
+    try {
+      const result = await api('/api/notifications/email/test', { method: 'POST' });
+      setEmailFeedback(result.message, 'success');
+    } catch (error) { setEmailFeedback(error.message, 'error'); throw error; }
+  });
+});
+
+document.querySelector('#emailClearBtn').addEventListener('click', async (event) => {
+  if (!confirm('确定清空 SMTP 配置并停止邮箱提醒？')) return;
+  await runAction(event.currentTarget, '清空中', async () => {
+    state.monitoring.email = await api('/api/notifications/email/settings', { method: 'DELETE' });
+    renderEmailSettings(true);
+    setEmailFeedback('邮箱配置已清空');
+  });
 });
 
 document.querySelector('#pushPlusForm').addEventListener('submit', async (event) => {

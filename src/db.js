@@ -415,6 +415,16 @@ CREATE TABLE IF NOT EXISTS alert_events (
 CREATE INDEX IF NOT EXISTS idx_alert_events_status_time ON alert_events(status, opened_at);
 CREATE INDEX IF NOT EXISTS idx_alert_events_fingerprint ON alert_events(fingerprint, status);
 
+CREATE TABLE IF NOT EXISTS alert_notification_deliveries (
+  alert_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  cycle TEXT NOT NULL,
+  delivered_at TEXT NOT NULL,
+  PRIMARY KEY (alert_id, kind, channel),
+  FOREIGN KEY (alert_id) REFERENCES alert_events(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS own_sites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,

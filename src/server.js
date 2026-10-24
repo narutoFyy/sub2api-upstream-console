@@ -14,6 +14,7 @@ const { buildUpstreamMonitoring } = require('./monitoringService');
 const { buildConsumptionDashboard, normalizePeriod } = require('./consumptionTrendService');
 const { checkUpstreamKeys } = require('./keyConnectivityService');
 const { pushPlusStatus, sendPushPlus, readPushPlusTargets, savePushPlusTargets, PUSHPLUS_TARGETS_KEY } = require('./pushPlusClient');
+const { emailStatus, saveEmailSettings, sendEmail, EMAIL_SETTINGS_KEY } = require('./emailClient');
 const { syncUpstreamModels } = require('./modelDiscoveryService');
 const { updateManagedKey, deleteManagedKey } = require('./keyMutationService');
 const { queryUpstreamUsage, getUpstreamUsageDetail } = require('./upstreamUsage');
@@ -548,6 +549,7 @@ app.delete('/api/upstreams/:id', (req, res) => {
 app.get('/api/monitoring/upstreams', (req, res) => {
   const monitoring = buildUpstreamMonitoring(repo);
   monitoring.pushplus = pushPlusStatus();
+  monitoring.email = emailStatus();
   monitoring.open_alerts = repo.listAlerts({ status: 'open' }, 500)
     .filter((item) => !item.acknowledged_at).length;
   res.json(monitoring);
@@ -905,6 +907,30 @@ function persistEditablePushPlusTargets(targets) {
 
 app.get('/api/notifications/pushplus/status', (req, res) => {
   res.json(pushPlusStatus());
+});
+
+app.get('/api/notifications/email/settings', (req, res) => {
+  res.json(emailStatus());
+});
+
+app.put('/api/notifications/email/settings', (req, res, next) => {
+  try {
+    res.json({ ok: true, ...saveEmailSettings(req.body || {}) });
+  } catch (error) { next(error); }
+});
+
+app.delete('/api/notifications/email/settings', (req, res) => {
+  repo.deleteSetting(EMAIL_SETTINGS_KEY);
+  res.json({ ok: true, ...emailStatus() });
+});
+
+app.post('/api/notifications/email/test', async (req, res, next) => {
+  try {
+    res.json(await sendEmail({
+      title: '上游运维控制台 · 邮箱提醒测试',
+      content: `SMTP 测试邮件。收到此邮件表示邮箱提醒通道可用。\n时间：${new Date().toISOString()}`
+    }, { allowDisabled: true }));
+  } catch (error) { next(error); }
 });
 
 app.get('/api/notifications/pushplus/targets', (req, res) => {

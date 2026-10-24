@@ -6,9 +6,9 @@
     <meta name="color-scheme" content="light dark" />
     <title>Upstream Control</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/styles.css?v=compact-actions-20260810" />
+    <link rel="stylesheet" href="/styles.css?v=smtp-notifications-1.9.0" />
     <script src="/vendor/lucide/lucide.min.js" defer></script>
-    <script src="/app.js?v=compact-actions-20260810" defer></script>
+    <script src="/app.js?v=smtp-notifications-1.9.0" defer></script>
   </head>
   <body>
     <section id="loginScreen" class="login-screen" hidden>
@@ -213,6 +213,25 @@
             </div>
 
             <div class="settings-panel" data-settings-panel="notifications">
+              <section class="surface runtime-setting-section">
+                <div class="section-heading"><div><h3>邮箱提醒（SMTP）</h3><p id="emailSettingStatus" class="muted" aria-live="polite">未配置</p></div></div>
+                <form id="emailForm">
+                  <div class="settings-form-grid">
+                    <label class="setting-field"><span>SMTP 服务器</span><input name="host" type="text" required maxlength="253" autocomplete="off" placeholder="smtp.example.com" /></label>
+                    <label class="setting-field"><span>端口</span><input name="port" type="number" required min="1" max="65535" value="465" /></label>
+                    <label class="setting-field"><span>加密方式</span><select name="security"><option value="tls">SSL/TLS（通常为 465）</option><option value="starttls">STARTTLS（通常为 587）</option></select></label>
+                    <label class="setting-field"><span>SMTP 用户名</span><input name="user" type="text" maxlength="254" autocomplete="off" placeholder="通常为完整邮箱地址" /></label>
+                    <label class="setting-field"><span>密码／SMTP 授权码</span><input name="password" type="password" maxlength="2000" autocomplete="new-password" placeholder="首次配置请填写" /></label>
+                    <label class="setting-field"><span>发件人邮箱</span><input name="from" type="email" required maxlength="254" placeholder="alerts@example.com" /></label>
+                    <label class="setting-field"><span>收件人邮箱</span><input name="to" type="text" required maxlength="5200" placeholder="多个地址用逗号分隔，最多 20 个" /></label>
+                    <label class="setting-field"><span>连接超时（毫秒）</span><input name="timeout_ms" type="number" min="1000" max="60000" value="10000" required /></label>
+                    <label class="toggle-field inline-toggle"><input name="enabled" type="checkbox" /><span class="toggle-control"></span><span>启用邮箱提醒</span></label>
+                  </div>
+                  <p class="muted">保存后生效，密码留空保留原值。请使用邮件服务商的 SMTP 授权码。邮箱与微信共用下方发送规则和上游通知开关；测试邮件不受告警开关限制。</p>
+                  <div class="pushplus-editor-actions email-actions"><button class="btn primary" type="submit"><i data-lucide="save"></i>保存邮箱配置</button><button id="emailTestBtn" class="btn secondary" type="button">测试已保存配置</button><button id="emailClearBtn" class="btn danger-outline" type="button">清空配置</button></div>
+                  <p id="emailFeedback" class="pushplus-test-feedback" role="status" hidden></p>
+                </form>
+              </section>
               <section class="surface runtime-setting-section pushplus-manager">
                 <div class="section-heading">
                   <div><h3>PushPlus 通知目标</h3><p id="pushPlusSettingStatus" class="muted">未配置</p></div>
@@ -238,7 +257,7 @@
                 </form>
               </section>
               <section class="surface runtime-setting-section">
-                <div class="section-heading"><div><h3>发送规则</h3><p class="muted">事件始终记录，开关只影响微信通知</p></div></div>
+                <div class="section-heading"><div><h3>发送规则</h3><p class="muted">事件始终记录，开关影响微信和邮箱通知</p></div></div>
                 <div class="toggle-grid">
                   <label class="toggle-field"><input type="checkbox" data-runtime-setting="notifications_enabled" /><span class="toggle-control"></span><span>通知总开关</span></label>
                   <label class="toggle-field"><input type="checkbox" data-runtime-setting="notify_key_connectivity" /><span class="toggle-control"></span><span>Key 联通异常</span></label>
@@ -269,7 +288,7 @@
             </div>
 
             <div class="settings-panel" data-settings-panel="upstreams" hidden>
-              <section class="table-section"><div class="table-section-title"><h2>上游策略覆盖</h2><span class="muted">保存只更新当前行</span></div><div class="table-scroll"><table class="data-table settings-policy-table"><thead><tr><th>上游</th><th>自动同步</th><th>Key 探测</th><th>微信通知</th><th>余额预警</th><th>倍率阈值</th><th class="align-right">操作</th></tr></thead><tbody id="runtimeUpstreamRows"></tbody></table></div></section>
+              <section class="table-section"><div class="table-section-title"><h2>上游策略覆盖</h2><span class="muted">保存只更新当前行</span></div><div class="table-scroll"><table class="data-table settings-policy-table"><thead><tr><th>上游</th><th>自动同步</th><th>Key 探测</th><th>告警通知</th><th>余额预警</th><th>倍率阈值</th><th class="align-right">操作</th></tr></thead><tbody id="runtimeUpstreamRows"></tbody></table></div></section>
             </div>
 
             <div class="settings-panel" data-settings-panel="system" hidden>
