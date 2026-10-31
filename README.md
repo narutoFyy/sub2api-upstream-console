@@ -2,7 +2,7 @@
 
 一个独立的 Sub2API 上游运维控制台，用来集中查看上游余额、Key 分组倍率、真实联通性、异常事件和同步状态。
 
-当前版本：`v1.9.0`
+当前版本：`v1.10.0`
 
 ## 项目定位
 
@@ -166,6 +166,15 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 - 支持进销倍率对账：`上游给我们` 取绑定上游 Key 的分组倍率，`我们卖出` 取自己站账号所在分组倍率，并显示倍率差。
 - 匹配成功时展示上游名称、平台、采购倍率、售卖倍率和分组信息；匹配失败时显示具体原因。
 
+### 用户请求报错监控与 Hermes 闭环
+
+- 用管理员 API Key 轮询自有 Sub2API 的 `/admin/ops/request-errors`，可按站点勾选分组（公共与专属都支持），按站点 + 错误 ID 去重。
+- 保存用户状态码、本地分类和消息、上游状态码、上游错误消息与详情、完整 `upstream_errors` 和关联上游错误日志；详情取数失败标记为部分详情。
+- `manual_codes` 命中走 PushPlus + 邮箱人工处理；`hermes_codes` 命中同时通知并以 HMAC V2 签名提交给本机 Hermes；未命中只记录。
+- 发给 Hermes 的内容为可配置的 `HERMES_PROMPT` + 本次错误详情，不含任何凭据；通过反向 SSH 通道访问本机 Hermes，断线时事件落库并在恢复后重试。
+- 查询 Hermes 回执，分别记录 PushPlus、邮箱、Hermes 和微信汇报的投递状态，「已提交 Hermes」不会显示为已解决。
+- 部署与 Hermes 路由配置见 [docs/REQUEST_ERROR_HERMES_CN.md](docs/REQUEST_ERROR_HERMES_CN.md)。
+
 ### 前端体验
 
 - 左侧导航的运维工作台，总览、上游监控、Key、自己站、模型价格、使用明细、告警和日志独立分区。
@@ -197,6 +206,9 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 | `MAX_KEY_CHECK_LOGS` | `10000` | 每个上游保留的 Key 检测历史数量 |
 | `MAX_SYNC_LOGS` | `500` | 每个上游保留的同步日志数量 |
 | `MAX_RATE_SNAPSHOTS` | `2000` | 每个上游保留的倍率快照数量 |
+| `REQUEST_ERROR_MONITOR_ENABLED` | `true` | 设为 `false` 强制停用用户报错监控，设置页不能绕过 |
+| `HERMES_WEBHOOK_URL` | 空 | Hermes Webhook 地址；设置后优先于设置页 |
+| `HERMES_WEBHOOK_SECRET` | 空 | Hermes HMAC 密钥；设置后优先于设置页加密保存的值 |
 | `SELF_UPDATE_ENABLED` | `false` | 是否启用设置页在线更新；仅应在 systemd/PM2 自动重启环境开启 |
 | `SELF_UPDATE_REMOTE` | `origin` | 在线更新使用的固定 Git 远端 |
 | `SELF_UPDATE_BRANCH` | `main` | 在线更新使用的固定 Git 分支 |
@@ -207,6 +219,11 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 Key 自动探测会向真实模型端点发送最小请求，允许产生极低但非零的消费。检测模型候选不会自动更新，只在上游编辑页手动点击“同步模型”时刷新并保存到本地；下次手动同步前继续使用当前缓存。
 
 ## 更新说明
+
+### v1.10.0 - 2026-10-31
+
+- 新增「用户报错」页面：监控自有 Sub2API 用户请求错误，按错误码分流到 Hermes 或人工处理，记录各渠道投递状态。
+- 新增 Hermes HMAC V2 签名投递、回执查询和通道检测；新增 `REQUEST_ERROR_MONITOR_ENABLED`、`HERMES_WEBHOOK_URL`、`HERMES_WEBHOOK_SECRET`。
 
 ### v1.8.7 - 2026-08-04
 

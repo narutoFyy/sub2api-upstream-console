@@ -6,6 +6,7 @@ const VIEW_META = {
   pricing: { title: '模型价格', search: '搜索模型或上游' },
   usage: { title: '使用明细', search: '搜索模型、Key 或分组' },
   alerts: { title: '告警事件', search: '搜索告警或上游' },
+  'request-errors': { title: '用户报错', search: '搜索错误消息、错误码或事件 ID' },
   logs: { title: '同步记录', search: '搜索日志或上游' },
   settings: { title: '设置', search: '搜索上游或 Key' }
 };
@@ -33,7 +34,8 @@ const state = {
   systemUpdate: { enabled: false, operation: { phase: 'idle' }, commits: [] },
   settingsTab: 'notifications',
   createdKey: '',
-  usage: { items: [], total: 0, page: 1, pageSize: 20, pages: 1, loading: false, error: '', upstreamId: '', startDate: '', endDate: '' }
+  usage: { items: [], total: 0, page: 1, pageSize: 20, pages: 1, loading: false, error: '', upstreamId: '', startDate: '', endDate: '' },
+  requestErrors: { items: [], total: 0, summary: {}, sites: [], settings: null, siteId: '', route: '', offset: 0, pageSize: 50, loaded: false }
 };
 
 const money = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
@@ -187,6 +189,7 @@ function setActiveView(view) {
   if (view === 'usage' && state.monitoring.items.length && !state.usage.loading) {
     window.queueMicrotask(loadUsage);
   }
+  if (view === 'request-errors') window.queueMicrotask(() => loadRequestErrors().catch((error) => toast(error.message, 'error')));
 }
 
 function metricMarkup(items) {
@@ -1065,6 +1068,7 @@ function renderCurrentView() {
   if (state.activeView === 'pricing') renderPricing();
   if (state.activeView === 'usage') renderUsage();
   if (state.activeView === 'alerts') renderAlerts();
+  if (state.activeView === 'request-errors') renderRequestErrors();
   if (state.activeView === 'logs') renderLogs();
   if (state.activeView === 'settings') renderSettings();
   renderPushPlus();
@@ -1218,6 +1222,7 @@ async function refreshAll({ quiet = false } = {}) {
     if (state.activeView === 'usage' && !state.usage.loading && !state.usage.items.length) {
       window.queueMicrotask(loadUsage);
     }
+    loadRequestErrors().catch(() => {});
   } finally {
     setBusy(false);
   }
@@ -1867,6 +1872,307 @@ document.addEventListener('click', async (event) => {
   if (target.dataset.action === 'import-config') return document.querySelector('#importFileInput').click();
   if (target.dataset.action === 'backup-database') { window.location.href = '/api/backup/database'; return; }
   if (target.dataset.action === 'logout') { await api('/api/logout', { method: 'POST' }); return showLogin(); }
+});
+
+const REQUEST_ERROR_ROUTES = {
+  hermes: { label: '移交 Hermes', tone: 'warning' },
+  manual: { label: '人工处理', tone: 'danger' },
+  none: { label: '仅记录', tone: 'neutral' }
+};
+const REQUEST_ERROR_CHANNELS = { pushplus: 'PushPlus', email: '邮箱', hermes: 'Hermes', weixin: '微信汇报' };
+const REQUEST_ERROR_DELIVERY = {
+  sent: { label: '已投递', tone: 'healthy' },
+  pending: { label: '待投递', tone: 'warning' },
+  failed: { label: '失败', tone: 'danger' },
+  skipped: { label: '未启用', tone: 'neutral' }
+};
+
+function requestErrorQuery() {
+  const params = new URLSearchParams({ limit: String(state.requestErrors.pageSize), offset: String(state.requestErrors.offset) });
+  if (state.requestErrors.siteId) params.set('own_site_id', state.requestErrors.siteId);
+  if (state.requestErrors.route) params.set('route', state.requestErrors.route);
+  if (state.search.trim()) params.set('search', state.search.trim());
+  return params.toString();
+}
+
+async function loadRequestErrors() {
+  const [events, sites, settings] = await Promise.all([
+    api(`/api/request-errors/events?${requestErrorQuery()}`),
+    api('/api/request-errors/sites'),
+    api('/api/request-errors/settings')
+  ]);
+  Object.assign(state.requestErrors, { items: events.items || [], total: events.total || 0, summary: events.summary || {}, sites: sites.items || [], settings, loaded: true });
+  renderRequestErrorBadge();
+  if (state.activeView === 'request-errors') renderRequestErrors();
+}
+
+function renderRequestErrorBadge() {
+  const failed = Number(state.requestErrors.summary.failed_deliveries || 0);
+  const badge = document.querySelector('#sidebarRequestErrorCount');
+  badge.hidden = !failed;
+  badge.textContent = String(failed);
+}
+
+function deliveryPills(deliveries = []) {
+  if (!deliveries.length) return '<span class="muted">不投递</span>';
+  return `<div class="delivery-pills">${deliveries.map((item) => {
+    const meta = REQUEST_ERROR_DELIVERY[item.status] || REQUEST_ERROR_DELIVERY.pending;
+    const title = item.last_error ? ` title="${escapeHtml(item.last_error)}"` : '';
+    return `<span class="status-pill ${meta.tone}"${title}>${REQUEST_ERROR_CHANNELS[item.channel] || item.channel} · ${meta.label}</span>`;
+  }).join('')}</div>`;
+}
+
+function requestErrorCodes(item) {
+  const matched = item.matched_codes || [];
+  const codes = matched.length ? matched : (item.error_codes || []).slice(0, 3);
+  return codes.length ? codes.map((code) => `<code>${escapeHtml(code)}</code>`).join(' ') : '<span class="muted">-</span>';
+}
+
+function renderRequestErrorRows() {
+  const { items, total, offset, pageSize } = state.requestErrors;
+  document.querySelector('#requestErrorRows').innerHTML = items.map((item) => {
+    const route = REQUEST_ERROR_ROUTES[item.route] || REQUEST_ERROR_ROUTES.none;
+    const detail = item.detail_status === 'pending'
+      ? '<span class="status-pill neutral">读取详情中</span>'
+      : `<span class="status-pill ${route.tone}">${route.label}</span>${item.detail_status === 'partial' ? '<small class="danger-text">部分详情</small>' : ''}`;
+    const failed = (item.deliveries || []).some((delivery) => delivery.status === 'failed');
+    return `<tr class="data-row"><td>${timeText(item.occurred_at)}</td><td><div class="cell-stack"><strong>${escapeHtml(item.own_site_name)}</strong><small>${escapeHtml(item.group_name || (item.group_id ? `分组 ${item.group_id}` : '-'))}</small></div></td><td>${requestErrorCodes(item)}</td><td class="numeric">${item.status_code ?? '-'} / ${item.upstream_status_code ?? '-'}</td><td><div class="cell-stack request-error-message"><strong>${escapeHtml(item.message || item.error_type || '-')}</strong><small>${escapeHtml(item.upstream_error_message || '')}</small></div></td><td><div class="cell-stack">${detail}</div></td><td>${deliveryPills(item.deliveries)}</td><td class="align-right"><div class="row-actions">${failed ? `<button class="icon-btn" type="button" data-retry-request-error="${item.id}" title="重试失败投递"><i data-lucide="rotate-ccw"></i></button>` : ''}<button class="icon-btn" type="button" data-open-request-error="${item.id}" title="详情"><i data-lucide="panel-right-open"></i></button></div></td></tr>`;
+  }).join('') || '<tr><td colspan="8"><div class="empty-state">还没有记录到用户请求报错</div></td></tr>';
+  const page = Math.floor(offset / pageSize) + 1;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  document.querySelector('#requestErrorPageSummary').textContent = `${total} 条记录 · 第 ${page}/${pages} 页`;
+  document.querySelector('#requestErrorPrevBtn').disabled = offset <= 0;
+  document.querySelector('#requestErrorNextBtn').disabled = offset + pageSize >= total;
+}
+
+function renderRequestErrorSites() {
+  const siteFilter = document.querySelector('#requestErrorSiteFilter');
+  siteFilter.innerHTML = `<option value="">全部站点</option>${state.requestErrors.sites.map((site) => `<option value="${site.own_site_id}">${escapeHtml(site.name)}</option>`).join('')}`;
+  siteFilter.value = state.requestErrors.siteId;
+  document.querySelector('#requestErrorRouteFilter').value = state.requestErrors.route;
+  document.querySelector('#requestErrorSiteRows').innerHTML = state.requestErrors.sites.map((site) => {
+    const selected = new Set(site.group_ids);
+    const groups = site.groups.length
+      ? `<div class="group-check-list">${site.groups.map((group) => `<label class="group-check"><input type="checkbox" data-monitor-group="${escapeHtml(group.id)}" ${selected.has(group.id) ? 'checked' : ''} /><span>${escapeHtml(group.name)}</span><small>${group.is_exclusive ? '专属' : '公共'}${group.platform ? ` · ${escapeHtml(group.platform)}` : ''}</small></label>`).join('')}</div>`
+      : `<span class="muted">${site.group_ids.length ? `已选 ${site.group_ids.length} 个分组` : '全部分组'}（保存 Key 后可读取分组）</span>`;
+    const poll = site.last_poll_error
+      ? `<span class="danger-text" title="${escapeHtml(site.last_poll_error)}">失败 · ${timeText(site.last_poll_at)}</span>`
+      : site.last_poll_at ? `${timeText(site.last_poll_at)} · 新增 ${site.last_poll_found}` : '尚未轮询';
+    return `<tr class="data-row" data-monitor-site="${site.own_site_id}"><td><div class="cell-stack"><strong>${escapeHtml(site.name)}</strong><small>${escapeHtml(site.base_url)}</small></div></td><td><label class="toggle-field compact-toggle"><input type="checkbox" data-monitor-field="enabled" ${site.enabled ? 'checked' : ''} aria-label="${escapeHtml(site.name)} 错误监控" /><span class="toggle-control"></span></label></td><td><input type="password" autocomplete="new-password" data-monitor-field="admin_api_key" placeholder="${site.has_admin_api_key ? `已保存 ${escapeHtml(site.admin_api_key_masked)}，留空保留` : '填写管理员 API Key'}" aria-label="${escapeHtml(site.name)} 管理员 API Key" /></td><td>${groups}</td><td>${poll}</td><td class="align-right"><div class="row-actions"><button class="icon-btn" type="button" data-refresh-monitor-groups="${site.own_site_id}" title="读取分组"><i data-lucide="list-restart"></i></button><button class="icon-btn" type="button" data-poll-monitor-site="${site.own_site_id}" title="立即轮询"><i data-lucide="radar"></i></button><button class="icon-btn" type="button" data-save-monitor-site="${site.own_site_id}" title="保存"><i data-lucide="save"></i></button></div></td></tr>`;
+  }).join('') || '<tr><td colspan="6"><div class="empty-state">请先在「自己站观测」添加自有 Sub2API 站点</div></td></tr>';
+}
+
+function fillRequestErrorSettings() {
+  const status = state.requestErrors.settings;
+  if (!status) return;
+  const form = document.querySelector('#requestErrorSettingsForm');
+  const settings = status.settings;
+  for (const element of form.elements) {
+    if (!element.name || element.name === 'hermes_secret') continue;
+    const value = settings[element.name];
+    if (element.type === 'checkbox') element.checked = Boolean(value);
+    else if (Array.isArray(value)) element.value = value.join('\n');
+    else element.value = value ?? '';
+  }
+  form.elements.hermes_secret.value = '';
+  form.elements.enabled.disabled = Boolean(status.locks?.monitor);
+  form.elements.hermes_webhook_url.disabled = Boolean(status.locks?.hermes_webhook_url);
+  form.elements.hermes_secret.disabled = Boolean(status.locks?.hermes_secret);
+}
+
+function renderRequestErrorStatus() {
+  const status = state.requestErrors.settings;
+  if (!status) return;
+  const summary = state.requestErrors.summary || {};
+  const byRoute = summary.by_route || {};
+  document.querySelector('#requestErrorSummary').textContent = `移交 Hermes ${byRoute.hermes || 0} · 人工处理 ${byRoute.manual || 0} · 仅记录 ${byRoute.none || 0} · 待投递 ${summary.pending_deliveries || 0} · 投递失败 ${summary.failed_deliveries || 0}`;
+  const effective = status.effective || {};
+  document.querySelector('#requestErrorSettingsStatus').textContent = status.locks?.monitor
+    ? '已被环境变量 REQUEST_ERROR_MONITOR_ENABLED=false 强制停用'
+    : `${effective.enabled ? '运行中' : '未启用'} · ${status.warning || (status.source === 'database' ? '控制台配置，保存后热生效' : '默认值')}`;
+  const secret = status.hermes_secret || {};
+  document.querySelector('#requestErrorHermesStatus').textContent = [
+    effective.hermes_enabled ? '已启用' : '未启用',
+    secret.configured ? `HMAC 密钥 ${secret.source === 'environment' ? '来自环境变量' : secret.masked}` : 'HMAC 密钥未配置',
+    status.locks?.hermes_webhook_url ? `地址来自环境变量：${effective.hermes_webhook_url}` : ''
+  ].filter(Boolean).join(' · ');
+}
+
+function renderRequestErrors() {
+  if (!state.requestErrors.loaded) return;
+  renderRequestErrorRows();
+  renderRequestErrorSites();
+  renderRequestErrorStatus();
+  if (!state.requestErrors.settingsFilled) {
+    fillRequestErrorSettings();
+    state.requestErrors.settingsFilled = true;
+  }
+  refreshIcons();
+}
+
+function parseCodeList(value) {
+  return String(value || '').split(/[\s,，;；]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function collectRequestErrorSettings(form) {
+  const payload = {};
+  for (const element of form.elements) {
+    if (!element.name || element.disabled) continue;
+    if (element.type === 'checkbox') payload[element.name] = element.checked;
+    else if (element.type === 'number') payload[element.name] = Number(element.value);
+    else if (['hermes_codes', 'manual_codes'].includes(element.name)) payload[element.name] = parseCodeList(element.value);
+    else if (element.name === 'hermes_secret') { if (element.value.trim()) payload.hermes_secret = element.value.trim(); }
+    else payload[element.name] = element.value;
+  }
+  return payload;
+}
+
+function requestErrorDetailLines(rows) {
+  return `<div class="detail-list">${rows.map(([label, value]) => `<div class="detail-line"><span>${label}</span><strong>${escapeHtml(value ?? '-') || '-'}</strong></div>`).join('')}</div>`;
+}
+
+function requestErrorJsonBlock(title, value) {
+  if (!value || (Array.isArray(value) && !value.length)) return '';
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  return `<div class="detail-block"><h3>${title}</h3><pre class="code-block">${escapeHtml(text)}</pre></div>`;
+}
+
+function showRequestErrorDetail(event) {
+  const route = REQUEST_ERROR_ROUTES[event.route] || REQUEST_ERROR_ROUTES.none;
+  document.querySelector('#requestErrorDialogSubtitle').textContent = `${event.delivery_id} · ${new Date(event.occurred_at).toLocaleString('zh-CN', { hour12: false })}`;
+  const deliveries = (event.deliveries || []).map((item) => {
+    const meta = REQUEST_ERROR_DELIVERY[item.status] || REQUEST_ERROR_DELIVERY.pending;
+    return `<div class="detail-line"><span>${REQUEST_ERROR_CHANNELS[item.channel] || item.channel}</span><strong><span class="status-pill ${meta.tone}">${meta.label}</span> ${item.attempts ? `尝试 ${item.attempts} 次` : ''}${item.delivered_at ? ` · ${timeText(item.delivered_at)}` : ''}${item.last_error ? `<br><small class="muted">${escapeHtml(item.last_error)}</small>` : ''}</strong></div>`;
+  }).join('') || '<div class="detail-line"><span>投递</span><strong>未命中错误码，只记录</strong></div>';
+  const hermes = event.route === 'hermes'
+    ? `<div class="detail-block"><h3>Hermes 回执</h3>${requestErrorDetailLines([
+      ['处理状态', event.hermes_processing || '尚未回执'],
+      ['微信投递', event.hermes_delivery || '-']
+    ])}${event.hermes_result ? `<pre class="code-block">${escapeHtml(event.hermes_result)}</pre>` : ''}<p class="muted">Hermes 已受理不代表问题已解决，以回执中的处理结果为准。</p></div>`
+    : '';
+  document.querySelector('#requestErrorDialogContent').innerHTML = `
+    <div class="detail-block"><h3>分流</h3>${requestErrorDetailLines([
+      ['结果', route.label],
+      ['命中错误码', (event.matched_codes || []).join(', ') || '-'],
+      ['全部错误码', (event.error_codes || []).join(', ') || '-'],
+      ['详情完整性', event.detail_status === 'complete' ? '完整' : event.detail_status === 'pending' ? '读取中' : `部分详情：${event.detail_error || '取数失败'}`]
+    ])}</div>
+    <div class="detail-block"><h3>投递状态</h3><div class="detail-list">${deliveries}</div></div>
+    ${hermes}
+    <div class="detail-block"><h3>请求</h3>${requestErrorDetailLines([
+      ['站点', `${event.own_site_name} (${event.own_site_base_url})`],
+      ['分组', `${event.group_name || '-'}${event.group_id ? ` · ID ${event.group_id}` : ''}`],
+      ['Sub2API 错误 ID', event.error_id],
+      ['请求 ID', event.request_id],
+      ['平台 / 模型', `${event.platform || '-'} / ${event.model || '-'}`],
+      ['用户状态码', event.status_code],
+      ['本地分类', [event.phase, event.error_type, event.error_owner, event.error_source].filter(Boolean).join(' / ')],
+      ['本地消息', event.message]
+    ])}</div>
+    <div class="detail-block"><h3>上游</h3>${requestErrorDetailLines([
+      ['上游状态码', event.upstream_status_code],
+      ['上游错误消息', event.upstream_error_message]
+    ])}</div>
+    ${requestErrorJsonBlock('用户收到的错误响应', event.error_body)}
+    ${requestErrorJsonBlock('上游错误详情', event.upstream_error_detail)}
+    ${requestErrorJsonBlock(`上游尝试记录（${(event.upstream_errors || []).length}）`, event.upstream_errors)}
+    ${requestErrorJsonBlock(`关联上游错误日志（${(event.related_upstream_errors || []).length}）`, event.related_upstream_errors)}`;
+  if (!document.querySelector('#requestErrorDialog').open) document.querySelector('#requestErrorDialog').showModal();
+  refreshIcons();
+}
+
+function collectMonitorSite(row) {
+  const payload = { enabled: row.querySelector('[data-monitor-field="enabled"]').checked };
+  const key = row.querySelector('[data-monitor-field="admin_api_key"]').value.trim();
+  if (key) payload.admin_api_key = key;
+  const groupInputs = [...row.querySelectorAll('[data-monitor-group]')];
+  if (groupInputs.length) payload.group_ids = groupInputs.filter((input) => input.checked).map((input) => input.dataset.monitorGroup);
+  return payload;
+}
+
+async function reloadRequestErrorEvents() {
+  const events = await api(`/api/request-errors/events?${requestErrorQuery()}`);
+  Object.assign(state.requestErrors, { items: events.items || [], total: events.total || 0, summary: events.summary || {} });
+  renderRequestErrorBadge();
+  renderRequestErrors();
+}
+
+document.querySelector('#requestErrorSiteFilter').addEventListener('change', (event) => { state.requestErrors.siteId = event.target.value; state.requestErrors.offset = 0; reloadRequestErrorEvents().catch((error) => toast(error.message, 'error')); });
+document.querySelector('#requestErrorRouteFilter').addEventListener('change', (event) => { state.requestErrors.route = event.target.value; state.requestErrors.offset = 0; reloadRequestErrorEvents().catch((error) => toast(error.message, 'error')); });
+document.querySelector('#requestErrorRefreshBtn').addEventListener('click', (event) => runAction(event.currentTarget, '刷新中', loadRequestErrors));
+document.querySelector('#requestErrorPrevBtn').addEventListener('click', () => { state.requestErrors.offset = Math.max(0, state.requestErrors.offset - state.requestErrors.pageSize); reloadRequestErrorEvents().catch((error) => toast(error.message, 'error')); });
+document.querySelector('#requestErrorNextBtn').addEventListener('click', () => { state.requestErrors.offset += state.requestErrors.pageSize; reloadRequestErrorEvents().catch((error) => toast(error.message, 'error')); });
+document.querySelector('#globalSearchInput').addEventListener('input', () => {
+  if (state.activeView !== 'request-errors') return;
+  window.clearTimeout(state.requestErrors.searchTimer);
+  state.requestErrors.searchTimer = window.setTimeout(() => { state.requestErrors.offset = 0; reloadRequestErrorEvents().catch(() => {}); }, 300);
+});
+
+document.querySelector('#requestErrorSettingsForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  await runAction(form.querySelector('button[type="submit"]'), '保存中', async () => {
+    const result = await api('/api/request-errors/settings', { method: 'PUT', body: JSON.stringify(collectRequestErrorSettings(form)) });
+    state.requestErrors.settings = result;
+    fillRequestErrorSettings();
+    renderRequestErrorStatus();
+    toast(result.overlap_codes?.length ? `已保存；${result.overlap_codes.join(', ')} 同时在两组中，将按人工处理` : '错误监控设置已保存', 'success');
+  });
+});
+
+document.querySelector('#requestErrorHermesHealthBtn').addEventListener('click', (event) => runAction(event.currentTarget, '检测中', async () => {
+  const result = await api('/api/request-errors/hermes/health', { method: 'POST' });
+  toast(result.ok ? `Hermes 通道可达（${result.url}）` : `Hermes 返回 HTTP ${result.status}`, result.ok ? 'success' : 'error');
+}));
+
+document.querySelector('#requestErrorClearSecretBtn').addEventListener('click', (event) => {
+  if (!window.confirm('清除后 Hermes 投递会暂停，确定清除 HMAC 密钥？')) return;
+  runAction(event.currentTarget, '清除中', async () => {
+    state.requestErrors.settings = await api('/api/request-errors/settings/hermes-secret', { method: 'DELETE' });
+    renderRequestErrorStatus();
+    toast('HMAC 密钥已清除', 'success');
+  });
+});
+
+document.querySelector('[data-view="request-errors"]').addEventListener('click', async (event) => {
+  const target = event.target.closest('button');
+  if (!target) return;
+  if (target.dataset.openRequestError) {
+    const result = await api(`/api/request-errors/events/${target.dataset.openRequestError}`).catch((error) => toast(error.message, 'error'));
+    if (result?.event) showRequestErrorDetail(result.event);
+    return;
+  }
+  if (target.dataset.retryRequestError) {
+    return runAction(target, '重试中', async () => {
+      const result = await api(`/api/request-errors/events/${target.dataset.retryRequestError}/retry`, { method: 'POST' });
+      toast(`已重新投递 ${result.reset} 个渠道`, 'success');
+      await reloadRequestErrorEvents();
+    });
+  }
+  const siteId = target.dataset.saveMonitorSite || target.dataset.refreshMonitorGroups || target.dataset.pollMonitorSite;
+  if (!siteId) return;
+  const row = target.closest('[data-monitor-site]');
+  if (target.dataset.saveMonitorSite) {
+    return runAction(target, '', async () => {
+      await api(`/api/request-errors/sites/${siteId}`, { method: 'PUT', body: JSON.stringify(collectMonitorSite(row)) });
+      await loadRequestErrors();
+      toast('监控站点已保存', 'success');
+    });
+  }
+  if (target.dataset.refreshMonitorGroups) {
+    return runAction(target, '', async () => {
+      const key = row.querySelector('[data-monitor-field="admin_api_key"]').value.trim();
+      if (key) await api(`/api/request-errors/sites/${siteId}`, { method: 'PUT', body: JSON.stringify({ admin_api_key: key }) });
+      const result = await api(`/api/request-errors/sites/${siteId}/groups/refresh`, { method: 'POST' });
+      await loadRequestErrors();
+      toast(`已读取 ${result.site.groups.length} 个分组`, 'success');
+    });
+  }
+  return runAction(target, '', async () => {
+    const result = await api(`/api/request-errors/sites/${siteId}/poll`, { method: 'POST' });
+    await loadRequestErrors();
+    toast(result.error ? `轮询失败：${result.error}` : `轮询完成，新增 ${result.found} 条`, result.error ? 'error' : 'success');
+  });
 });
 
 async function boot() {

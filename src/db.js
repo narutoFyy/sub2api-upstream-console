@@ -491,6 +491,74 @@ CREATE TABLE IF NOT EXISTS own_site_route_manual_bindings (
   FOREIGN KEY (own_site_id) REFERENCES own_sites(id) ON DELETE CASCADE,
   FOREIGN KEY (upstream_site_id) REFERENCES upstream_sites(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS request_error_monitor_sites (
+  own_site_id INTEGER PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  encrypted_admin_api_key TEXT NOT NULL DEFAULT '',
+  group_ids TEXT NOT NULL DEFAULT '[]',
+  groups_cache TEXT NOT NULL DEFAULT '[]',
+  last_poll_at TEXT,
+  last_poll_error TEXT NOT NULL DEFAULT '',
+  last_poll_found INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (own_site_id) REFERENCES own_sites(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS request_error_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  own_site_id INTEGER NOT NULL,
+  error_id TEXT NOT NULL,
+  delivery_id TEXT NOT NULL,
+  group_id TEXT NOT NULL DEFAULT '',
+  group_name TEXT NOT NULL DEFAULT '',
+  occurred_at TEXT NOT NULL,
+  status_code INTEGER,
+  phase TEXT NOT NULL DEFAULT '',
+  error_type TEXT NOT NULL DEFAULT '',
+  error_owner TEXT NOT NULL DEFAULT '',
+  error_source TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  platform TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  request_id TEXT NOT NULL DEFAULT '',
+  error_body TEXT NOT NULL DEFAULT '',
+  upstream_status_code INTEGER,
+  upstream_error_message TEXT NOT NULL DEFAULT '',
+  upstream_error_detail TEXT NOT NULL DEFAULT '',
+  upstream_errors TEXT NOT NULL DEFAULT '[]',
+  related_upstream_errors TEXT NOT NULL DEFAULT '[]',
+  error_codes TEXT NOT NULL DEFAULT '[]',
+  detail_status TEXT NOT NULL DEFAULT 'partial',
+  detail_error TEXT NOT NULL DEFAULT '',
+  route TEXT NOT NULL DEFAULT 'none',
+  matched_codes TEXT NOT NULL DEFAULT '[]',
+  hermes_processing TEXT NOT NULL DEFAULT '',
+  hermes_delivery TEXT NOT NULL DEFAULT '',
+  hermes_result TEXT NOT NULL DEFAULT '',
+  captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (own_site_id, error_id),
+  FOREIGN KEY (own_site_id) REFERENCES own_sites(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_error_events_time ON request_error_events(occurred_at);
+
+CREATE TABLE IF NOT EXISTS request_error_deliveries (
+  event_id INTEGER NOT NULL,
+  channel TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
+  delivered_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (event_id, channel),
+  FOREIGN KEY (event_id) REFERENCES request_error_events(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_error_deliveries_due ON request_error_deliveries(status, next_attempt_at);
 `);
 
 function ensureColumn(table, column, definition) {

@@ -612,6 +612,21 @@ dialog::backdrop { background: rgba(13, 18, 24, 0.44); backdrop-filter: blur(2px
 .sidebar-collapsed .main-shell { margin-left: 72px; }
 .sidebar-collapsed .sidebar-footer svg { transform: rotate(180deg); }
 
+.surface.spaced, .section-heading.spaced, .setting-field.spaced { margin-top: 20px; }
+.settings-form-grid.two-column-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
+.delivery-pills { display: flex; flex-wrap: wrap; gap: 4px; max-width: 260px; }
+.delivery-pills .status-pill { min-height: 22px; font-size: 11px; }
+.request-error-message { max-width: 320px; }
+.request-error-message strong, .request-error-message small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.request-error-table td:first-child { white-space: nowrap; }
+.request-error-table code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.request-error-site-table input[type="password"] { min-width: 200px; }
+.group-check-list { display: flex; flex-wrap: wrap; gap: 6px; max-width: 420px; }
+.group-check { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.group-check input { width: auto; min-height: 0; }
+.group-check small { color: var(--text-muted); }
+.code-block { margin: 0; padding: 10px 12px; max-height: 320px; overflow: auto; border-radius: 8px; background: var(--surface-subtle); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 @media (max-width: 1180px) {
   .topbar { grid-template-columns: minmax(170px, 0.7fr) minmax(240px, 1fr) auto; gap: 16px; padding: 0 20px; }
   .connection-badge span:last-child { display: none; }
@@ -646,6 +661,7 @@ dialog::backdrop { background: rgba(13, 18, 24, 0.44); backdrop-filter: blur(2px
 }
 
 @media (max-width: 620px) {
+  .settings-form-grid.two-column-grid { grid-template-columns: 1fr; }
   h1 { font-size: 20px; }
   .topbar-actions .btn span { display: none; }
   .topbar-actions .btn { width: 40px; padding: 0; }

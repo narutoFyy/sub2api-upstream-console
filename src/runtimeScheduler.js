@@ -2,13 +2,15 @@ const config = require('./config');
 const { runtimeSettingsStatus } = require('./runtimeSettings');
 const { syncDueSites } = require('./syncService');
 const { checkDueUpstreams } = require('./keyConnectivityService');
+const { createRequestErrorState, runRequestErrorMonitor } = require('./requestErrorMonitor');
 
 function createSchedulerState() {
   return {
     lastSyncScanAt: 0,
     lastKeyScanAt: 0,
     syncRunning: false,
-    keyRunning: false
+    keyRunning: false,
+    requestErrors: createRequestErrorState()
   };
 }
 
@@ -43,8 +45,15 @@ async function runRuntimeScheduler(state, dependencies = {}) {
     })).finally(() => { state.keyRunning = false; }));
   }
 
-  await Promise.all(jobs);
-  return { jobs: jobs.length, status };
+  // The request-error monitor keeps its own overlap guard and poll interval.
+  const requestErrorJob = environmentAllowsRequestErrors(dependencies.environment || config)
+    ? Promise.resolve((dependencies.runRequestErrors || runRequestErrorMonitor)(
+      state.requestErrors || (state.requestErrors = createRequestErrorState())
+    )).catch((error) => (dependencies.onError || console.error)('Request error monitor failed:', error))
+    : null;
+
+  await Promise.all([...jobs, requestErrorJob]);
+  return { jobs: jobs.length, requestErrors: Boolean(requestErrorJob), status };
 }
 
 function startRuntimeScheduler(dependencies = {}) {
@@ -58,8 +67,13 @@ function startRuntimeScheduler(dependencies = {}) {
   return { interval, state };
 }
 
+function environmentAllowsRequestErrors(environment = config) {
+  return environment.requestErrorMonitorEnabled !== false;
+}
+
 function schedulerAllowed(environment = config) {
-  return environment.syncSchedulerEnabled !== false || environment.keyCheckSchedulerEnabled !== false;
+  return environment.syncSchedulerEnabled !== false || environment.keyCheckSchedulerEnabled !== false
+    || environmentAllowsRequestErrors(environment);
 }
 
 module.exports = {

@@ -21,6 +21,16 @@ const { queryUpstreamUsage, getUpstreamUsageDetail } = require('./upstreamUsage'
 const { buildUpstreamDetail } = require('./upstreamDetail');
 const { runtimeSettingsStatus, updateRuntimeSettings } = require('./runtimeSettings');
 const { startRuntimeScheduler, schedulerAllowed } = require('./runtimeScheduler');
+const errorRepo = require('./requestErrorRepository');
+const { listAdminGroups } = require('./requestErrorClient');
+const { pollSiteNow, dispatchDueDeliveries } = require('./requestErrorMonitor');
+const { checkHermesHealth } = require('./hermesClient');
+const {
+  requestErrorSettingsStatus,
+  updateRequestErrorSettings,
+  effectiveRequestErrorSettings,
+  clearHermesSecret
+} = require('./requestErrorSettings');
 const { createUpdateService } = require('./updateService');
 const database = require('./db');
 const { finiteNumberOrNull } = require('./utils');
@@ -664,6 +674,119 @@ app.post('/api/own-sites/:id/routes/:routeId/manual-bind', (req, res, next) => {
     const payload = ownRouteBindingSchema.parse(req.body || {});
     const binding = repo.saveOwnRouteManualBinding(id, req.params.routeId, payload);
     res.json({ binding, routes: repo.listOwnSiteRoutes(id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const requestErrorSiteSchema = z.object({
+  enabled: z.boolean().optional(),
+  admin_api_key: z.string().trim().max(500).optional(),
+  clear_admin_api_key: z.boolean().optional(),
+  group_ids: z.array(z.union([z.string(), z.number()]).transform(String)).max(500).optional()
+}).strict();
+
+function requireMonitorSite(req, res) {
+  const id = Number(req.params.id);
+  const site = Number.isInteger(id) ? errorRepo.getMonitorSite(id) : null;
+  if (!site) res.status(404).json({ error: 'Not found' });
+  return site;
+}
+
+app.get('/api/request-errors/settings', (req, res) => {
+  res.json(requestErrorSettingsStatus());
+});
+
+app.put('/api/request-errors/settings', (req, res, next) => {
+  try {
+    res.json({ ok: true, ...updateRequestErrorSettings(req.body || {}) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.delete('/api/request-errors/settings/hermes-secret', (req, res) => {
+  res.json({ ok: true, ...clearHermesSecret() });
+});
+
+app.post('/api/request-errors/hermes/health', async (req, res, next) => {
+  try {
+    res.json(await checkHermesHealth(effectiveRequestErrorSettings()));
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/request-errors/sites', (req, res) => {
+  res.json({ items: errorRepo.listMonitorSites() });
+});
+
+app.put('/api/request-errors/sites/:id', (req, res, next) => {
+  try {
+    if (!requireMonitorSite(req, res)) return;
+    const payload = requestErrorSiteSchema.parse(req.body || {});
+    if (payload.admin_api_key === '') delete payload.admin_api_key;
+    res.json({ ok: true, site: errorRepo.saveMonitorSite(Number(req.params.id), payload) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/request-errors/sites/:id/groups/refresh', async (req, res, next) => {
+  try {
+    const site = requireMonitorSite(req, res);
+    if (!site) return;
+    const apiKey = errorRepo.getMonitorAdminApiKey(site.own_site_id);
+    if (!apiKey) return res.status(422).json({ error: '请先保存该站点的管理员 API Key' });
+    const groups = await listAdminGroups({
+      baseUrl: site.base_url,
+      apiKey,
+      timeoutMs: effectiveRequestErrorSettings().request_timeout_ms
+    });
+    errorRepo.saveMonitorGroupsCache(site.own_site_id, groups);
+    res.json({ ok: true, site: errorRepo.getMonitorSite(site.own_site_id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/api/request-errors/sites/:id/poll', async (req, res, next) => {
+  try {
+    if (!requireMonitorSite(req, res)) return;
+    res.json({ ok: true, ...await pollSiteNow(Number(req.params.id)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/request-errors/events', (req, res) => {
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  res.json({
+    ...errorRepo.listEvents({
+      ownSiteId: Number(req.query.own_site_id) || null,
+      route: ['hermes', 'manual', 'none'].includes(req.query.route) ? req.query.route : '',
+      search: String(req.query.search || '').trim().slice(0, 200),
+      limit,
+      offset
+    }),
+    summary: errorRepo.summarizeEvents()
+  });
+});
+
+app.get('/api/request-errors/events/:id', (req, res) => {
+  const event = errorRepo.getEvent(Number(req.params.id));
+  if (!event) return res.status(404).json({ error: 'Not found' });
+  res.json({ event });
+});
+
+app.post('/api/request-errors/events/:id/retry', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!errorRepo.getEvent(id)) return res.status(404).json({ error: 'Not found' });
+    const reset = errorRepo.retryFailedDeliveries(id);
+    await dispatchDueDeliveries(effectiveRequestErrorSettings());
+    res.json({ ok: true, reset, event: errorRepo.getEvent(id) });
   } catch (err) {
     next(err);
   }

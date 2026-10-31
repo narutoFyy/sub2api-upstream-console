@@ -6,9 +6,9 @@
     <meta name="color-scheme" content="light dark" />
     <title>Upstream Control</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/styles.css?v=smtp-notifications-1.9.0" />
+    <link rel="stylesheet" href="/styles.css?v=request-errors-1.10.0" />
     <script src="/vendor/lucide/lucide.min.js" defer></script>
-    <script src="/app.js?v=smtp-notifications-1.9.0" defer></script>
+    <script src="/app.js?v=request-errors-1.10.0" defer></script>
   </head>
   <body>
     <section id="loginScreen" class="login-screen" hidden>
@@ -42,6 +42,7 @@
           <button class="nav-link" type="button" data-view-target="pricing"><i data-lucide="badge-dollar-sign"></i><span>模型价格</span></button>
           <button class="nav-link" type="button" data-view-target="usage"><i data-lucide="list-tree"></i><span>使用明细</span></button>
           <button class="nav-link" type="button" data-view-target="alerts"><i data-lucide="bell"></i><span>告警事件</span><span id="sidebarAlertCount" class="nav-count" hidden></span></button>
+          <button class="nav-link" type="button" data-view-target="request-errors"><i data-lucide="bug"></i><span>用户报错</span><span id="sidebarRequestErrorCount" class="nav-count" hidden></span></button>
 
           <span class="nav-label">系统</span>
           <button class="nav-link" type="button" data-view-target="logs"><i data-lucide="file-clock"></i><span>同步记录</span></button>
@@ -193,6 +194,41 @@
           <section class="view" data-view="alerts" hidden>
             <div class="page-heading"><div><h2>告警事件</h2></div><div class="filter-actions"><select id="alertStatusFilter"><option value="">全部事件</option><option value="pending">待处理</option><option value="acknowledged">已处理</option><option value="resolved">已恢复</option></select><button id="acknowledgeVisibleAlertsBtn" class="btn secondary" type="button"><i data-lucide="check-check"></i>全部标记已处理</button></div></div>
             <section class="table-section"><div class="table-scroll"><table class="data-table"><thead><tr><th>状态</th><th>事件</th><th>上游</th><th>Key</th><th>严重程度</th><th>发生时间</th><th>通知</th><th class="align-right">操作</th></tr></thead><tbody id="alertRows"></tbody></table></div></section>
+          </section>
+
+          <section class="view" data-view="request-errors" hidden>
+            <div class="page-heading"><div><h2>用户请求报错</h2><p id="requestErrorSummary" class="muted">监控自有 Sub2API 站点的用户请求错误，按错误码分流到 Hermes 或人工处理</p></div><div class="filter-actions"><select id="requestErrorSiteFilter" aria-label="站点"><option value="">全部站点</option></select><select id="requestErrorRouteFilter" aria-label="分流"><option value="">全部分流</option><option value="hermes">移交 Hermes</option><option value="manual">人工处理</option><option value="none">仅记录</option></select><button id="requestErrorRefreshBtn" class="btn secondary" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
+            <section class="table-section"><div class="table-scroll"><table class="data-table request-error-table"><thead><tr><th>时间</th><th>站点 / 分组</th><th>错误码</th><th>用户 / 上游</th><th>报错</th><th>分流</th><th>投递</th><th class="align-right">操作</th></tr></thead><tbody id="requestErrorRows"></tbody></table></div><div class="pagination-bar"><span id="requestErrorPageSummary">0 条记录</span><div class="button-group"><button id="requestErrorPrevBtn" class="btn secondary" type="button"><i data-lucide="chevron-left"></i>上一页</button><button id="requestErrorNextBtn" class="btn secondary" type="button">下一页<i data-lucide="chevron-right"></i></button></div></div></section>
+
+            <section class="table-section spaced"><div class="table-section-title"><h2>监控站点</h2><span class="muted">站点来自「自己站观测」；管理员 API Key 加密保存，不选分组表示监控全部分组（公共与专属）</span></div><div class="table-scroll"><table class="data-table request-error-site-table"><thead><tr><th>站点</th><th>监控</th><th>管理员 API Key</th><th>分组</th><th>最近轮询</th><th class="align-right">操作</th></tr></thead><tbody id="requestErrorSiteRows"></tbody></table></div></section>
+
+            <form id="requestErrorSettingsForm" class="surface runtime-setting-section spaced">
+              <div class="section-heading"><div><h3>监控与分流设置</h3><p id="requestErrorSettingsStatus" class="muted"></p></div><label class="toggle-field"><input type="checkbox" name="enabled" /><span class="toggle-control"></span><span>启用监控</span></label></div>
+              <div class="settings-form-grid">
+                <label class="setting-field"><span>轮询周期（秒）</span><input name="poll_interval_seconds" type="number" min="15" max="86400" required /></label>
+                <label class="setting-field"><span>回看窗口（分钟）</span><input name="lookback_minutes" type="number" min="1" max="43200" required /></label>
+                <label class="setting-field"><span>请求超时（毫秒）</span><input name="request_timeout_ms" type="number" min="1000" max="120000" required /></label>
+                <label class="setting-field"><span>每轮详情数量</span><input name="max_details_per_poll" type="number" min="1" max="200" required /></label>
+                <label class="setting-field"><span>重试次数</span><input name="max_retries" type="number" min="0" max="50" required /></label>
+                <label class="setting-field"><span>退避基数（秒，按次翻倍）</span><input name="retry_backoff_seconds" type="number" min="5" max="86400" required /></label>
+              </div>
+              <div class="settings-form-grid two-column-grid">
+                <label class="setting-field"><span>hermes_codes（命中交给 Hermes）</span><textarea name="hermes_codes" rows="3" placeholder="每行或逗号分隔一个，例如：upstream_error, 5xx, overloaded_error"></textarea></label>
+                <label class="setting-field"><span>manual_codes（命中由本人处理，优先级更高）</span><textarea name="manual_codes" rows="3" placeholder="例如：429, insufficient_quota, account_auth"></textarea></label>
+              </div>
+              <p class="muted">匹配本地分类（phase / type / owner / source）、用户状态码、上游状态码以及上游错误正文里的 code / type 字段，不区分大小写。4xx、5xx 匹配一类状态码；* 是通配符，带 * 时也会匹配错误消息文本（如 *insufficient*），单独一个 * 表示全部；加 upstream: 前缀只匹配上游报错（如 upstream:*insufficient*）。未命中的错误只记录。</p>
+
+              <div class="section-heading spaced"><div><h3>Hermes 通道</h3><p id="requestErrorHermesStatus" class="muted"></p></div><label class="toggle-field"><input type="checkbox" name="hermes_enabled" /><span class="toggle-control"></span><span>启用 Hermes</span></label></div>
+              <div class="settings-form-grid two-column-grid">
+                <label class="setting-field"><span>Webhook 地址（服务器回环端口，经反向 SSH 通道到本机 Hermes）</span><input name="hermes_webhook_url" type="url" maxlength="500" required /></label>
+                <label class="setting-field"><span>HMAC 密钥</span><input name="hermes_secret" type="password" autocomplete="new-password" maxlength="500" placeholder="留空保留原值，至少 16 个字符" /></label>
+                <label class="setting-field"><span>微信汇报目标（传给 Hermes 路由的 report_target，可留空）</span><input name="hermes_report_target" type="text" maxlength="200" autocomplete="off" /></label>
+                <label class="setting-field"><span>回执超时（分钟）</span><input name="hermes_receipt_timeout_minutes" type="number" min="5" max="10080" required /></label>
+                <label class="toggle-field inline-toggle"><input type="checkbox" name="hermes_receipt_enabled" /><span class="toggle-control"></span><span>查询 Hermes 回执并记录微信投递结果</span></label>
+              </div>
+              <label class="setting-field spaced"><span>HERMES_PROMPT（发送内容 = 此提示词 + 本次错误详情；{codes} 会替换为本次错误码）</span><textarea name="hermes_prompt" rows="6" maxlength="20000" placeholder="由你填写；控制台不限制 Hermes 的处理动作"></textarea></label>
+              <div class="pushplus-editor-actions"><button class="btn primary" type="submit"><i data-lucide="save"></i>保存设置</button><button id="requestErrorHermesHealthBtn" class="btn secondary" type="button"><i data-lucide="plug-zap"></i>检测 Hermes 通道</button><button id="requestErrorClearSecretBtn" class="btn danger-outline" type="button">清除 HMAC 密钥</button></div>
+            </form>
           </section>
 
           <section class="view" data-view="logs" hidden>
@@ -356,6 +392,7 @@
     </dialog>
 
     <dialog id="detailDialog" class="drawer-dialog"><div class="drawer-shell"><div class="modal-header"><div><h2 id="detailTitle">上游详情</h2><p id="detailSubtitle" class="muted"></p></div><button class="icon-btn" type="button" data-close-dialog="detailDialog" aria-label="关闭"><i data-lucide="x"></i></button></div><div id="detailContent" class="drawer-content"></div></div></dialog>
+    <dialog id="requestErrorDialog" class="drawer-dialog"><div class="drawer-shell"><div class="modal-header"><div><h2>用户报错详情</h2><p id="requestErrorDialogSubtitle" class="muted"></p></div><button class="icon-btn" type="button" data-close-dialog="requestErrorDialog" aria-label="关闭"><i data-lucide="x"></i></button></div><div id="requestErrorDialogContent" class="drawer-content"></div></div></dialog>
     <dialog id="usageDetailDialog" class="drawer-dialog"><div class="drawer-shell"><div class="modal-header"><div><h2>请求详情</h2><p id="usageDetailSubtitle" class="muted"></p></div><button class="icon-btn" type="button" data-close-dialog="usageDetailDialog" aria-label="关闭"><i data-lucide="x"></i></button></div><div id="usageDetailContent" class="drawer-content"></div></div></dialog>
 
     <dialog id="createKeyDialog" class="modal small-modal">
