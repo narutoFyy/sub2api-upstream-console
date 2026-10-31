@@ -6,9 +6,10 @@
     <meta name="color-scheme" content="light dark" />
     <title>Upstream Control</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/styles.css?v=request-errors-1.10.0" />
+    <link rel="stylesheet" href="/styles.css?v=request-errors-1.11.0" />
     <script src="/vendor/lucide/lucide.min.js" defer></script>
-    <script src="/app.js?v=request-errors-1.10.0" defer></script>
+    <script src="/request-error-codes.js?v=request-errors-1.11.0" defer></script>
+    <script src="/app.js?v=request-errors-1.11.0" defer></script>
   </head>
   <body>
     <section id="loginScreen" class="login-screen" hidden>
@@ -213,10 +214,10 @@
                 <label class="setting-field"><span>退避基数（秒，按次翻倍）</span><input name="retry_backoff_seconds" type="number" min="5" max="86400" required /></label>
               </div>
               <div class="settings-form-grid two-column-grid">
-                <label class="setting-field"><span>hermes_codes（命中交给 Hermes）</span><textarea name="hermes_codes" rows="3" placeholder="每行或逗号分隔一个，例如：upstream_error, 5xx, overloaded_error"></textarea></label>
-                <label class="setting-field"><span>manual_codes（命中由本人处理，优先级更高）</span><textarea name="manual_codes" rows="3" placeholder="例如：429, insufficient_quota, account_auth"></textarea></label>
+                <div class="setting-field code-picker" data-code-picker="hermes_codes"><span>hermes_codes（命中交给 Hermes）</span><input type="hidden" name="hermes_codes" /><div class="code-picker-anchor"><button class="code-picker-toggle" type="button" aria-expanded="false"><span class="code-picker-summary">点击选择错误码</span><i data-lucide="chevron-down"></i></button><div class="code-picker-panel" hidden><input class="code-picker-search" type="search" placeholder="搜索错误码或说明" aria-label="搜索错误码" /><div class="code-picker-options"></div><div class="code-picker-custom"><input type="text" maxlength="120" placeholder="自定义匹配，如 upstream:*insufficient*" aria-label="自定义匹配" /><button class="btn secondary" type="button">添加</button></div></div></div><div class="code-picker-chips"></div></div>
+                <div class="setting-field code-picker" data-code-picker="manual_codes"><span>manual_codes（命中由本人处理，优先级更高）</span><input type="hidden" name="manual_codes" /><div class="code-picker-anchor"><button class="code-picker-toggle" type="button" aria-expanded="false"><span class="code-picker-summary">点击选择错误码</span><i data-lucide="chevron-down"></i></button><div class="code-picker-panel" hidden><input class="code-picker-search" type="search" placeholder="搜索错误码或说明" aria-label="搜索错误码" /><div class="code-picker-options"></div><div class="code-picker-custom"><input type="text" maxlength="120" placeholder="自定义匹配，如 upstream:*insufficient*" aria-label="自定义匹配" /><button class="btn secondary" type="button">添加</button></div></div></div><div class="code-picker-chips"></div></div>
               </div>
-              <p class="muted">匹配本地分类（phase / type / owner / source）、用户状态码、上游状态码以及上游错误正文里的 code / type 字段，不区分大小写。4xx、5xx 匹配一类状态码；* 是通配符，带 * 时也会匹配错误消息文本（如 *insufficient*），单独一个 * 表示全部；加 upstream: 前缀只匹配上游报错（如 upstream:*insufficient*）。未命中的错误只记录。</p>
+              <p class="muted">匹配本地分类（phase / type / owner / source）、用户状态码、上游状态码以及上游错误正文里的 code / type 字段，不区分大小写。4xx、5xx 匹配一类状态码；* 是通配符，带 * 时也会匹配错误消息文本（如 *insufficient*），单独一个 * 表示全部；下拉里「上游报错」选项带 upstream: 前缀，只匹配上游返回的内容；「本服务器报错」和「归因分类」带 local: 前缀，只匹配 yf-mail 自己返回给用户的内容。不带前缀的自定义值两边都匹配。同一项在两组都选时按人工处理。未命中的错误只记录。</p>
 
               <div class="section-heading spaced"><div><h3>Hermes 通道</h3><p id="requestErrorHermesStatus" class="muted"></p></div><label class="toggle-field"><input type="checkbox" name="hermes_enabled" /><span class="toggle-control"></span><span>启用 Hermes</span></label></div>
               <div class="settings-form-grid two-column-grid">

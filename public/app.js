@@ -1975,6 +1975,7 @@ function fillRequestErrorSettings() {
     else element.value = value ?? '';
   }
   form.elements.hermes_secret.value = '';
+  renderCodePickers();
   form.elements.enabled.disabled = Boolean(status.locks?.monitor);
   form.elements.hermes_webhook_url.disabled = Boolean(status.locks?.hermes_webhook_url);
   form.elements.hermes_secret.disabled = Boolean(status.locks?.hermes_secret);
@@ -2013,6 +2014,97 @@ function renderRequestErrors() {
 function parseCodeList(value) {
   return String(value || '').split(/[\s,，;；]+/).map((item) => item.trim()).filter(Boolean);
 }
+
+const CODE_PICKER_NAMES = ['hermes_codes', 'manual_codes'];
+const codeCatalog = new Map((window.REQUEST_ERROR_CODE_GROUPS || []).flatMap((group) => group.sections.flatMap((section) => section.items.map((item) => [item.value, { ...item, group }]))));
+
+function codePickerField(name) {
+  return document.querySelector(`#requestErrorSettingsForm input[name="${name}"]`);
+}
+
+function codePickerValues(name) {
+  return [...new Set(parseCodeList(codePickerField(name).value).map((code) => code.toLowerCase()))];
+}
+
+function setCodePickerValues(name, values) {
+  codePickerField(name).value = values.join('\n');
+  renderCodePickers();
+}
+
+function codeChipText(value) {
+  const item = codeCatalog.get(value);
+  if (item) return `${item.group.short} · ${item.code} ${item.label}`;
+  return /^(upstream|local):/.test(value) ? value : `${value}（不分上游 / 本地）`;
+}
+
+function renderCodePicker(picker) {
+  const name = picker.dataset.codePicker;
+  const selected = new Set(codePickerValues(name));
+  const other = new Set(codePickerValues(CODE_PICKER_NAMES.find((item) => item !== name)));
+  const query = picker.querySelector('.code-picker-search').value.trim().toLowerCase();
+  const matches = (item) => !query || `${item.value} ${item.label}`.toLowerCase().includes(query);
+  picker.querySelector('.code-picker-options').innerHTML = (window.REQUEST_ERROR_CODE_GROUPS || []).map((group) => {
+    const sections = group.sections.map((section) => {
+      const items = section.items.filter(matches);
+      if (!items.length) return '';
+      return `<div class="code-picker-section"><div class="code-picker-section-title">${escapeHtml(section.title)}</div>${items.map((item) => `<label class="code-option"><input type="checkbox" data-code-value="${escapeHtml(item.value)}" ${selected.has(item.value) ? 'checked' : ''} /><code>${escapeHtml(item.code)}</code><span>${escapeHtml(item.label)}</span>${other.has(item.value) ? '<em>另一组已选</em>' : ''}</label>`).join('')}</div>`;
+    }).join('');
+    return sections ? `<div class="code-picker-group"><div class="code-picker-group-title"><strong>${escapeHtml(group.title)}</strong><small>${escapeHtml(group.hint)}</small></div>${sections}</div>` : '';
+  }).join('') || '<div class="empty-state">没有匹配的错误码，可在下方自定义添加</div>';
+  picker.querySelector('.code-picker-summary').textContent = selected.size ? `已选 ${selected.size} 项` : '点击选择错误码';
+  picker.querySelector('.code-picker-chips').innerHTML = [...selected].map((value) => `<span class="code-chip${other.has(value) ? ' overlap' : ''}" title="${escapeHtml(value)}">${escapeHtml(codeChipText(value))}<button type="button" data-remove-code="${escapeHtml(value)}" aria-label="移除 ${escapeHtml(value)}">×</button></span>`).join('');
+}
+
+function renderCodePickers() {
+  document.querySelectorAll('[data-code-picker]').forEach(renderCodePicker);
+}
+
+function toggleCodePicker(picker, open) {
+  document.querySelectorAll('[data-code-picker]').forEach((item) => {
+    const show = item === picker && open;
+    item.querySelector('.code-picker-panel').hidden = !show;
+    item.querySelector('.code-picker-toggle').setAttribute('aria-expanded', String(show));
+  });
+  if (open) picker.querySelector('.code-picker-search').focus();
+}
+
+document.querySelectorAll('[data-code-picker]').forEach((picker) => {
+  const name = picker.dataset.codePicker;
+  const customInput = picker.querySelector('.code-picker-custom input');
+  const addCustom = () => {
+    const added = parseCodeList(customInput.value).map((code) => code.toLowerCase());
+    if (!added.length) return;
+    setCodePickerValues(name, [...new Set([...codePickerValues(name), ...added])]);
+    customInput.value = '';
+  };
+  picker.querySelector('.code-picker-toggle').addEventListener('click', () => toggleCodePicker(picker, picker.querySelector('.code-picker-panel').hidden));
+  picker.querySelector('.code-picker-search').addEventListener('input', () => renderCodePicker(picker));
+  picker.querySelector('.code-picker-options').addEventListener('change', (event) => {
+    const value = event.target.dataset.codeValue;
+    if (!value) return;
+    const values = codePickerValues(name).filter((code) => code !== value);
+    setCodePickerValues(name, event.target.checked ? [...values, value] : values);
+  });
+  picker.querySelector('.code-picker-chips').addEventListener('click', (event) => {
+    const value = event.target.dataset.removeCode;
+    if (value) setCodePickerValues(name, codePickerValues(name).filter((code) => code !== value));
+  });
+  picker.querySelector('.code-picker-custom button').addEventListener('click', addCustom);
+  customInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    addCustom();
+  });
+});
+
+document.addEventListener('click', (event) => {
+  // composedPath still holds nodes a re-render detached during this click.
+  if (!event.composedPath().some((node) => node.dataset?.codePicker)) toggleCodePicker(null, false);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') toggleCodePicker(null, false);
+});
 
 function collectRequestErrorSettings(form) {
   const payload = {};

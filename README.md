@@ -171,6 +171,7 @@ UPDATE_BACKUP_DIR=/var/backups/sub2api-upstream-console
 - 用管理员 API Key 轮询自有 Sub2API 的 `/admin/ops/request-errors`，可按站点勾选分组（公共与专属都支持），按站点 + 错误 ID 去重。
 - 保存用户状态码、本地分类和消息、上游状态码、上游错误消息与详情、完整 `upstream_errors` 和关联上游错误日志；详情取数失败标记为部分详情。
 - `manual_codes` 命中走 PushPlus + 邮箱人工处理；`hermes_codes` 命中同时通知并以 HMAC V2 签名提交给本机 Hermes；未命中只记录。
+- 两组在设置页都是下拉多选，选项按 yf-mail（Sub2API）的错误码整理在 `public/request-error-codes.js`：上游报错带 `upstream:` 前缀，只匹配上游返回的内容；本服务器报错和归因分类带 `local:` 前缀，只匹配本站自己返回给用户的内容；不带前缀的自定义值两边都匹配。
 - 发给 Hermes 的内容为可配置的 `HERMES_PROMPT` + 本次错误详情，不含任何凭据；通过反向 SSH 通道访问本机 Hermes，断线时事件落库并在恢复后重试。
 - 查询 Hermes 回执，分别记录 PushPlus、邮箱、Hermes 和微信汇报的投递状态，「已提交 Hermes」不会显示为已解决。
 - 部署与 Hermes 路由配置见 [docs/REQUEST_ERROR_HERMES_CN.md](docs/REQUEST_ERROR_HERMES_CN.md)。

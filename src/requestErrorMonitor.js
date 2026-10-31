@@ -153,6 +153,18 @@ function upstreamTexts(event) {
   return texts.map((text) => String(text || '').trim().toLowerCase()).filter(Boolean);
 }
 
+// Codes this server produced itself: its own response body, user status code and classification.
+function localCodes(event) {
+  const codes = new Set();
+  const add = (value) => {
+    const text = String(value ?? '').trim().toLowerCase();
+    if (text && text !== '0' && text.length <= 120) codes.add(text);
+  };
+  structuredCodes(parseJsonValue(event.error_body)).forEach(add);
+  [event.error_type, event.status_code, event.phase, event.error_owner, event.error_source].forEach(add);
+  return [...codes];
+}
+
 // Codes are matched exactly; free text (error messages and bodies) only by * patterns.
 function matchCandidates(event) {
   const upstream = upstreamCodes(event);
@@ -160,8 +172,10 @@ function matchCandidates(event) {
   return {
     codes: extractErrorCodes(event),
     upstream_codes: upstream,
+    local_codes: localCodes(event),
     texts: [...upstreamTexts(event), ...localTexts],
-    upstream_texts: upstreamTexts(event)
+    upstream_texts: upstreamTexts(event),
+    local_texts: localTexts
   };
 }
 
@@ -177,22 +191,23 @@ function codeMatches(pattern, code) {
   return pattern.includes('*') && globToRegExp(pattern).test(code);
 }
 
+// upstream: limits a pattern to upstream fields, local: to this server's own fields.
 function patternMatches(rawPattern, candidates) {
-  const scoped = rawPattern.startsWith('upstream:');
-  const pattern = scoped ? rawPattern.slice('upstream:'.length) : rawPattern;
+  const scope = /^(upstream|local):/.exec(rawPattern)?.[1] || '';
+  const pattern = scope ? rawPattern.slice(scope.length + 1) : rawPattern;
   if (!pattern) return false;
-  if (pattern === '*') return !scoped || candidates.upstream_codes.length > 0;
-  const codes = scoped ? candidates.upstream_codes : candidates.codes;
+  const codes = scope ? candidates[`${scope}_codes`] || [] : candidates.codes;
+  if (pattern === '*') return !scope || codes.length > 0;
   if (codes.some((code) => codeMatches(pattern, code))) return true;
   if (!pattern.includes('*')) return false;
-  const texts = scoped ? candidates.upstream_texts : candidates.texts;
+  const texts = scope ? candidates[`${scope}_texts`] || [] : candidates.texts;
   return texts.some((text) => codeMatches(pattern, text));
 }
 
 // manual_codes win when an error matches both lists.
 function classifyRoute(input, settings) {
   const candidates = Array.isArray(input)
-    ? { codes: input, upstream_codes: input, texts: [], upstream_texts: [] }
+    ? { codes: input, upstream_codes: input, local_codes: input, texts: [], upstream_texts: [], local_texts: [] }
     : input;
   const matchList = (patterns) => patterns.filter((pattern) => patternMatches(pattern, candidates));
   const manual = matchList(settings.manual_codes || []);

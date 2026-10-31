@@ -309,3 +309,41 @@ test('Hermes payload carries prompt plus error details only', () => {
   assert.ok(payload.prompt.startsWith('## Sub2API 用户请求错误'));
   assert.deepEqual(Object.keys(payload).sort(), ['delivery_id', 'event', 'event_type', 'prompt', 'report_target']);
 });
+
+test('local: patterns only match what this server returned, upstream: only the upstream side', () => {
+  const upstreamLimited = matchCandidates({
+    status_code: 502, error_type: 'upstream_error', phase: 'upstream', error_owner: 'provider', error_source: 'upstream_http',
+    upstream_status_code: 429,
+    upstream_errors: [{ upstream_status_code: 429, kind: 'failover', upstream_response_body: '{"error":{"type":"rate_limit_error"}}' }],
+    related_upstream_errors: []
+  });
+  const route = (manual) => classifyRoute(upstreamLimited, settings({ manual_codes: manual, hermes_codes: [] })).route;
+  assert.equal(route(['upstream:429']), 'manual');
+  assert.equal(route(['local:429']), 'none');
+  assert.equal(route(['local:502']), 'manual');
+  assert.equal(route(['upstream:502']), 'none');
+  assert.equal(route(['upstream:rate_limit_error']), 'manual');
+  assert.equal(route(['local:rate_limit_error']), 'none');
+  assert.equal(route(['local:upstream_http']), 'manual');
+  assert.equal(route(['local:5xx']), 'manual');
+  assert.equal(route(['upstream:failover']), 'manual');
+
+  const localBalance = matchCandidates({
+    status_code: 403, error_type: 'billing_error', phase: 'request', error_owner: 'client', error_source: 'client_request',
+    error_body: '{"code":"INSUFFICIENT_BALANCE","message":"Insufficient account balance"}', upstream_errors: [], related_upstream_errors: []
+  });
+  const localRoute = (manual) => classifyRoute(localBalance, settings({ manual_codes: manual, hermes_codes: [] })).route;
+  assert.equal(localRoute(['local:insufficient_balance']), 'manual');
+  assert.equal(localRoute(['upstream:insufficient_balance']), 'none');
+  assert.equal(localRoute(['upstream:*']), 'none');
+  assert.equal(localRoute(['local:*insufficient account*']), 'manual');
+});
+
+test('every picker catalog value is a valid, unique, scoped error code', () => {
+  const { REQUEST_ERROR_CODE_GROUPS } = require('../public/request-error-codes');
+  const { requestErrorSettingsSchema } = require('../src/requestErrorSettings');
+  const values = REQUEST_ERROR_CODE_GROUPS.flatMap((group) => group.sections.flatMap((section) => section.items.map((item) => item.value)));
+  assert.equal(new Set(values).size, values.length);
+  assert.ok(values.every((value) => /^(upstream|local):[a-z0-9_]+$/.test(value)));
+  assert.deepEqual(requestErrorSettingsSchema.shape.hermes_codes.parse(values), values);
+});
