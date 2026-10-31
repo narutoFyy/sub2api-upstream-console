@@ -248,3 +248,15 @@ T-004 delivery note: the execution environment DNS maps public hosts to `198.18.
 T-004 evidence: final real read-only sync returned provider `new-api`, one Key normalized to `active`, three rates, sixteen pricing items, a numeric balance, and one expected `/ratio_config` warning. No server process was left running and no credentials were written to the repository.
 
 Completion: complete
+
+# Current Goal: Request Error Monitoring and Hermes Closure
+
+- Mode: state-main; topology: linear; no child agents.
+- Baseline: clean worktree at `e11add0`; local checkpoint already approved and committed.
+- Scope: local console repository only; no production changes, remote operations, service restarts, or edits to the external Hermes installation without a separately confirmed scope.
+- T-001 Interface and receipt protocol: `replan_required -> blocked_on_user`.
+- Pressure check: an accepted webhook does not establish that the agent completed or that the Weixin gateway delivered its response. A mock callback alone would not demonstrate that the installed Hermes emits that callback.
+- Evidence: the installed `gateway/platforms/webhook.py` returns HTTP 202 with `status=accepted` after dispatch. Its `on_processing_complete` hook closes the session and does not emit a receipt; cross-platform delivery receives a `SendResult`, but the current webhook interface exposes no event-correlated receipt to the console. The internal delivery ledger is best-effort and can be disabled, so its existence alone does not establish a supported external receipt contract.
+- Consequence: a credible end-to-end receipt requires an integration on the Hermes side, whose installed files and running gateway are outside the confirmed write scope. The agreed plan explicitly stops at this stage if the receipt protocol cannot be validated.
+- Pending decision: authorize a separately scoped local Hermes integration design and implementation, or explicitly choose a reduced scope that reports completion and Weixin delivery as unknown. Production deployment and service restart require separate approval in either case.
+- T-002 through T-006: pending; no feature code or production data changed.
